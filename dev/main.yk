@@ -1,0 +1,13 @@
+immut op = "/";
+immut f = 12;
+immut s = 15;
+
+if op == "+" {
+    f + s
+} else if op == "-" {
+    f - s
+} else if op == "/" {
+    f / s
+} else if op == "*" {
+    f * s
+}

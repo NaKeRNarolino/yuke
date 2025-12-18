@@ -1,0 +1,15 @@
+[package]
+name = "yuke"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.100"
+lazy_static = "1.5.0"
+regex = "1.12.2"
+collection_literals = "1.0.3"
+thiserror = "2.0.17"
+enum_derive = "0.1.7"
+custom_derive = "0.1.7"
+enum-as-inner = "0.6.1"
+colored = "3.0.0"
