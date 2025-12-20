@@ -63,7 +63,8 @@ pub enum KeywordType {
     For,
     While,
     If,
-    Else
+    Else,
+    When
 }
 
 
@@ -101,7 +102,8 @@ lazy_static! {
             "for" => KeywordType::For,
             "while" => KeywordType::While,
             "if" => KeywordType::If,
-            "else" => KeywordType::Else
+            "else" => KeywordType::Else,
+            "when" => KeywordType::When
         }
     }.into_iter().map(|(k, v)| (AtomStorage::atom(k.to_string()), v)).collect();
 

@@ -1,14 +1,16 @@
 use crate::interpret::structs::{BinExpLogicals, BinExpRelations};
-mod structs;
+pub mod structs;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt::format;
 use std::ops::Deref;
+use std::sync::Arc;
 use crate::interpret::structs::{AssignmentProperty, BinExpAdd, BinExpDiv, BinExpMul, BinExpRem, BinExpSub, RuntimeValue, Variable};
 use crate::lexer::structs::{OperatorType, Span};
 use crate::log::{Control, Log, LogOrigin};
 use crate::parser::structs::{ASTNode, ASTNodeValue};
 use crate::store::{Atom, AtomStorage};
+use crate::typed::{try_match, CallMatches, DataTypeSignature, GlobalTypes, GLOBAL_TYPES};
 use crate::util::{arw, Arw, Rw, Unbox};
 
 pub struct Interpreter {
@@ -16,14 +18,16 @@ pub struct Interpreter {
 
 pub struct RuntimeScope {
     parent: Option<Arw<RuntimeScope>>,
-    variables: Rw<HashMap<Atom, Arw<Variable>>>
+    variables: Rw<HashMap<Atom, Arw<Variable>>>,
+    types: Rw<HashMap<Atom, Arc<DataTypeSignature>>>
 }
 
 impl RuntimeScope {
     fn new_internal(parent: Option<Arw<RuntimeScope>>) -> Self {
         RuntimeScope {
             parent,
-            variables: Rw::new(HashMap::new())
+            variables: Rw::new(HashMap::new()),
+            types: Rw::new(HashMap::new())
         }
     }
 
@@ -63,7 +67,7 @@ impl RuntimeScope {
         }
     }
 
-    pub fn declare_variable(&self, name: Atom, value: RuntimeValue, is_immut: bool, trace: Option<Span>) {
+    pub fn declare_variable(&self, name: Atom, value: RuntimeValue, is_immut: bool, trace: Option<Span>, ty: Option<Arc<DataTypeSignature>>) {
         if let Some(_) = self.get_variable_condition(name) {
             Log::err(
                 format!("Variable '{}' cannot be redeclared.", AtomStorage::string(name).unwrap()),
@@ -75,8 +79,26 @@ impl RuntimeScope {
             Control::exit();
         }
 
+        if let Some(t) = ty.clone() {
+            if !(t.matches)(t.clone(), &value) {
+                Log::err(
+                    format!("Variable '{}' cannot be declared, as the provided value of type '{}' doesn't match the provided type of '{}'.", AtomStorage::string(name).unwrap(), self.try_match(&value).unwrap().visual_name, &t.visual_name),
+                    LogOrigin::Interpret
+                );
+                if let Some(span) = trace {
+                    Log::trace_span(span);
+                }
+                Control::exit();
+            }
+        }
+
+        let ty = match ty {
+            None => self.try_match(&value).unwrap(),
+            Some(v) => v
+        };
+
         self.variables.w().insert(name, arw(Variable {
-            name, value: Rw::new(value), is_immut
+            name, value: Rw::new(value), is_immut, ty
         }));
     }
 
@@ -91,7 +113,69 @@ impl RuntimeScope {
                     Control::exit();
                 }
 
+                if !v.r().ty.call_matches(&value) {
+                    Log::err(format!("Cannot assign a new value to the variable '{}' as the value of type '{}' doesn't match variable's type of '{}'.", AtomStorage::string(v_name).unwrap(), self.try_match(&value).unwrap().visual_name, &v.r().ty.visual_name), LogOrigin::Interpret);
+                    Log::trace_span(trace);
+                    Control::exit();
+                }
+
                 *v.w().value.w() = value;
+            }
+        }
+    }
+
+    pub fn try_match(&self, value: &RuntimeValue) -> Option<Arc<DataTypeSignature>> {
+        if let Some(sig) = try_match(&self.types.r(), value) {
+            return Some(sig);
+        }
+
+        if let Some(parent_scope) = &self.parent {
+            if let Some(sig) = parent_scope.r().try_match(value) {
+                return Some(sig);
+            }
+        }
+
+        try_match(&GLOBAL_TYPES.r(), value)
+    }
+
+    fn add_type(&mut self, types: (Atom, Arc<DataTypeSignature>)) {
+        self.types.w().insert(types.0, types.1);
+    }
+
+    fn find_type(&self, mut target_type: VecDeque<Atom>, trace: Option<Span>, name: Option<String>) -> Arc<DataTypeSignature> {
+        let initial = *target_type.front().unwrap();
+
+        if GlobalTypes::has_type(initial) {
+            return GlobalTypes::find_type(target_type, trace);
+        }
+
+        let name = if let Some(n) = name { n } else { Vec::from(target_type.clone()).iter().map(|x| AtomStorage::string(*x).unwrap().as_str()).collect::<Vec<&str>>().join(".") };
+
+        if self.types.r().contains_key(&initial) {
+            target_type.pop_front();
+            let tp = self.types.r();
+            let mut kv = tp.get(&initial).unwrap();
+
+            while !target_type.is_empty() {
+                let next = target_type.pop_front().unwrap();
+                kv = match kv.children.get(&next) {
+                    None => {
+                        Log::err(format!("Type '{}' couldn't be found.", &name), LogOrigin::Interpret);
+                        if let Some(tr) = trace { Log::trace_span(tr); }
+                        Control::exit();
+                    }
+                    Some(v) => v
+                }
+            }
+
+            kv.clone()
+        } else {
+            if let Some(par) = &self.parent {
+                par.r().find_type(target_type, trace, Some(name))
+            } else {
+                Log::err(format!("Type '{}' couldn't be found.", &name), LogOrigin::Interpret);
+                if let Some(tr) = trace { Log::trace_span(tr); }
+                Control::exit();
             }
         }
     }
@@ -121,16 +205,27 @@ impl Interpreter {
             ),
             ASTNodeValue::Boolean(v) => RuntimeValue::Boolean(v),
             ASTNodeValue::Block { contents } => self.eval_block(contents, arw(RuntimeScope::parented(scope))),
-            ASTNodeValue::If { .. } => self.eval_if(node, scope)
+            ASTNodeValue::If { .. } => self.eval_if(node, scope),
+            ASTNodeValue::Type { .. } => unimplemented!("This kind of ASTNodes should be unevaluatable."),
+            ASTNodeValue::When { .. } => self.eval_when(node, scope)
         }
     }
 
     fn eval_variable_declaration(&self, node: ASTNode, scope: Arw<RuntimeScope>) -> RuntimeValue {
-        let (name, value, is_immut) = node.value.into_variable_declaration().unwrap();
+        let (name, value, is_immut, ty) = node.value.into_variable_declaration().unwrap();
 
         let ev = self.eval_node((*value).clone(), scope.clone());
 
-        scope.w().declare_variable(name, ev, is_immut, Some(node.span));
+        let ty_res = match ty {
+            None => None,
+            Some(v) => Some(scope.r().find_type(
+                v.value.into_type().unwrap().into(),
+                Some(v.span),
+                None
+            ))
+        };
+
+        scope.w().declare_variable(name, ev, is_immut, Some(node.span), ty_res);
 
         RuntimeValue::Unit
     }
@@ -185,7 +280,7 @@ impl Interpreter {
         let (prop, value) = node.value.into_assignment().unwrap();
 
         // let ev_prop = self.eval_node(prop.unbox(), scope.clone());
-        let trace = prop.span;
+        let trace = node.span;
 
         let prop = Self::figure_out_assignment_property(prop.unbox());
         let ev_val = self.eval_node(value.unbox(), scope.clone());
@@ -208,6 +303,35 @@ impl Interpreter {
             let ev_condition = self.eval_node(stmt.condition.unbox(), scope.clone());
 
             if matches!(ev_condition, RuntimeValue::Boolean(true)) {
+                should_run_else = false;
+                ret = self.eval_node(stmt.block.unbox(), scope.clone());
+                break;
+            }
+        }
+
+        if should_run_else {
+            if let Some(r) = or_else {
+                ret = self.eval_node(r.unbox(), scope)
+            }
+        }
+
+        ret
+    }
+
+    fn eval_when(&self, node: ASTNode, scope: Arw<RuntimeScope>) -> RuntimeValue {
+        let (value, ifs, or_else) = node.value.into_when().unwrap();
+
+        let ev_v = self.eval_node(value.unbox(), scope.clone());
+
+        let mut ret = RuntimeValue::Unit;
+
+        let mut should_run_else = true;
+
+        for stmt in ifs {
+            let sp = stmt.condition.span;
+            let ev_condition = self.eval_node(stmt.condition.unbox(), scope.clone());
+
+            if matches!(ev_condition.eq(ev_v.clone(), sp), RuntimeValue::Boolean(true)) {
                 should_run_else = false;
                 ret = self.eval_node(stmt.block.unbox(), scope.clone());
                 break;

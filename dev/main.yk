@@ -1,13 +1,10 @@
-immut op = "/";
-immut f = 12;
-immut s = 15;
+immut op: Str = "%";
+immut f: Num = 31;
+immut s: Num = 15;
 
-if op == "+" {
-    f + s
-} else if op == "-" {
-    f - s
-} else if op == "/" {
-    f / s
-} else if op == "*" {
-    f * s
-}
+when op {
+    "+" { f + s }
+    "-" { f - s }
+    "*" { f * s }
+    "/" { f / s }
+} else { f % s }

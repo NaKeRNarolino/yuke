@@ -84,6 +84,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "proc_macro"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "quote"
 version = "1.0.42"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -242,6 +251,7 @@ dependencies = [
  "enum-as-inner",
  "enum_derive",
  "lazy_static",
+ "proc_macro",
  "regex",
  "thiserror",
 ]

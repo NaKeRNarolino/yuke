@@ -21,7 +21,8 @@ pub enum ASTNodeValue {
     VariableDeclaration {
         name: Atom,
         value: Box<ASTNode>,
-        immut: bool
+        immut: bool,
+        data_type: Option<Box<ASTNode>>
     },
     Assignment {
         prop: Box<ASTNode>,
@@ -33,6 +34,14 @@ pub enum ASTNodeValue {
         contents: Vec<ASTNode>
     },
     If {
+        ifs: Vec<IfContent>,
+        or_else: Option<Box<ASTNode>>
+    },
+    Type {
+        content: Vec<Atom>
+    },
+    When {
+        value: Box<ASTNode>,
         ifs: Vec<IfContent>,
         or_else: Option<Box<ASTNode>>
     },
