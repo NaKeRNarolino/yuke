@@ -13,3 +13,4 @@ enum_derive = "0.1.7"
 custom_derive = "0.1.7"
 enum-as-inner = "0.6.1"
 colored = "3.0.0"
+proc_macro = { path = "./proc_macro" }

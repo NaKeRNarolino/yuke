@@ -1,7 +1,9 @@
 use std::ops::{Add, Div, Mul, Rem, Sub};
+use std::sync::Arc;
 use crate::lexer::structs::Span;
 use crate::log::{Control, Log, LogOrigin};
 use crate::store::Atom;
+use crate::typed::DataTypeSignature;
 use crate::util::Rw;
 
 #[derive(Debug, Clone)]
@@ -241,7 +243,8 @@ impl BinExpLogicals for RuntimeValue {
 pub struct Variable {
     pub(crate) name: Atom,
     pub(crate) value: Rw<RuntimeValue>,
-    pub(crate) is_immut: bool
+    pub(crate) is_immut: bool,
+    pub ty: Arc<DataTypeSignature>
 }
 
 pub enum AssignmentProperty {
