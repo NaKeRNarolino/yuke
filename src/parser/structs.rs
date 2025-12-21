@@ -38,12 +38,23 @@ pub enum ASTNodeValue {
         or_else: Option<Box<ASTNode>>
     },
     Type {
-        content: Vec<Atom>
+        content: Vec<Atom>,
+        generics: Vec<ASTNode>
     },
     When {
         value: Box<ASTNode>,
         ifs: Vec<IfContent>,
         or_else: Option<Box<ASTNode>>
+    },
+    Function {
+        arg_names: Vec<Atom>,
+        arg_types: Vec<ASTNode>,
+        ret_type: Box<ASTNode>,
+        body: Box<ASTNode>
+    },
+    Call {
+        on: Box<ASTNode>,
+        args: Vec<ASTNode>
     },
     Unit
 }

@@ -1,10 +1,5 @@
-immut op: Str = "%";
-immut f: Num = 31;
-immut s: Num = 15;
-
-when op {
-    "+" { f + s }
-    "-" { f - s }
-    "*" { f * s }
-    "/" { f / s }
-} else { f % s }
+fn f(a: Num, b: Num) -> Num {
+    b * a
+}
+s
+f(10, 20)

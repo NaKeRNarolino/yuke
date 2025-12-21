@@ -1,4 +1,4 @@
-use crate::interpret::structs::{BinExpLogicals, BinExpRelations};
+use crate::interpret::structs::{BinExpLogicals, BinExpRelations, FunctionData};
 pub mod structs;
 
 use std::collections::{HashMap, VecDeque};
@@ -10,12 +10,13 @@ use crate::lexer::structs::{OperatorType, Span};
 use crate::log::{Control, Log, LogOrigin};
 use crate::parser::structs::{ASTNode, ASTNodeValue};
 use crate::store::{Atom, AtomStorage};
-use crate::typed::{try_match, CallMatches, DataTypeSignature, GlobalTypes, GLOBAL_TYPES};
+use crate::typed::{try_match, CallMatches, DataTypeSignature, FinalizedDataType, GlobalTypes, GLOBAL_TYPES};
 use crate::util::{arw, Arw, Rw, Unbox};
 
 pub struct Interpreter {
 }
 
+#[derive(Debug)]
 pub struct RuntimeScope {
     parent: Option<Arw<RuntimeScope>>,
     variables: Rw<HashMap<Atom, Arw<Variable>>>,
@@ -67,7 +68,7 @@ impl RuntimeScope {
         }
     }
 
-    pub fn declare_variable(&self, name: Atom, value: RuntimeValue, is_immut: bool, trace: Option<Span>, ty: Option<Arc<DataTypeSignature>>) {
+    pub fn declare_variable(&self, name: Atom, value: RuntimeValue, is_immut: bool, trace: Option<Span>, ty: Option<FinalizedDataType>) {
         if let Some(_) = self.get_variable_condition(name) {
             Log::err(
                 format!("Variable '{}' cannot be redeclared.", AtomStorage::string(name).unwrap()),
@@ -82,7 +83,7 @@ impl RuntimeScope {
         if let Some(t) = ty.clone() {
             if !(t.matches)(t.clone(), &value) {
                 Log::err(
-                    format!("Variable '{}' cannot be declared, as the provided value of type '{}' doesn't match the provided type of '{}'.", AtomStorage::string(name).unwrap(), self.try_match(&value).unwrap().visual_name, &t.visual_name),
+                    format!("Variable '{}' cannot be declared, as the provided value of type '{}' doesn't match the provided type of '{}'.", AtomStorage::string(name).unwrap(), self.try_match(&value).unwrap().vis(), &t.vis()),
                     LogOrigin::Interpret
                 );
                 if let Some(span) = trace {
@@ -114,7 +115,7 @@ impl RuntimeScope {
                 }
 
                 if !v.r().ty.call_matches(&value) {
-                    Log::err(format!("Cannot assign a new value to the variable '{}' as the value of type '{}' doesn't match variable's type of '{}'.", AtomStorage::string(v_name).unwrap(), self.try_match(&value).unwrap().visual_name, &v.r().ty.visual_name), LogOrigin::Interpret);
+                    Log::err(format!("Cannot assign a new value to the variable '{}' as the value of type '{}' doesn't match variable's type of '{}'.", AtomStorage::string(v_name).unwrap(), self.try_match(&value).unwrap().visual_name, &v.r().ty.vis()), LogOrigin::Interpret);
                     Log::trace_span(trace);
                     Control::exit();
                 }
@@ -124,7 +125,7 @@ impl RuntimeScope {
         }
     }
 
-    pub fn try_match(&self, value: &RuntimeValue) -> Option<Arc<DataTypeSignature>> {
+    pub fn try_match(&self, value: &RuntimeValue) -> Option<FinalizedDataType> {
         if let Some(sig) = try_match(&self.types.r(), value) {
             return Some(sig);
         }
@@ -142,11 +143,11 @@ impl RuntimeScope {
         self.types.w().insert(types.0, types.1);
     }
 
-    fn find_type(&self, mut target_type: VecDeque<Atom>, trace: Option<Span>, name: Option<String>) -> Arc<DataTypeSignature> {
+    pub(crate) fn find_type(&self, mut target_type: VecDeque<Atom>, generics: Vec<ASTNode>, trace: Option<Span>, name: Option<String>) -> FinalizedDataType {
         let initial = *target_type.front().unwrap();
 
         if GlobalTypes::has_type(initial) {
-            return GlobalTypes::find_type(target_type, trace);
+            return GlobalTypes::find_type(target_type, generics, trace, &self);
         }
 
         let name = if let Some(n) = name { n } else { Vec::from(target_type.clone()).iter().map(|x| AtomStorage::string(*x).unwrap().as_str()).collect::<Vec<&str>>().join(".") };
@@ -168,10 +169,25 @@ impl RuntimeScope {
                 }
             }
 
-            kv.clone()
+            let t = kv.clone();
+
+            FinalizedDataType::from(t).apply(
+                generics.iter().map(
+                    |x| {
+                        let (tp, tg) = x.value.clone().into_type().unwrap();
+
+                        self.find_type(
+                            tp.into(),
+                            tg,
+                            Some(x.span),
+                            None
+                        )
+                    }
+                ).collect()
+            )
         } else {
             if let Some(par) = &self.parent {
-                par.r().find_type(target_type, trace, Some(name))
+                par.r().find_type(target_type, generics, trace, Some(name))
             } else {
                 Log::err(format!("Type '{}' couldn't be found.", &name), LogOrigin::Interpret);
                 if let Some(tr) = trace { Log::trace_span(tr); }
@@ -207,7 +223,9 @@ impl Interpreter {
             ASTNodeValue::Block { contents } => self.eval_block(contents, arw(RuntimeScope::parented(scope))),
             ASTNodeValue::If { .. } => self.eval_if(node, scope),
             ASTNodeValue::Type { .. } => unimplemented!("This kind of ASTNodes should be unevaluatable."),
-            ASTNodeValue::When { .. } => self.eval_when(node, scope)
+            ASTNodeValue::When { .. } => self.eval_when(node, scope),
+            ASTNodeValue::Function { .. } => self.eval_function(node, scope),
+            ASTNodeValue::Call { .. } => self.eval_call(node, scope)
         }
     }
 
@@ -216,13 +234,18 @@ impl Interpreter {
 
         let ev = self.eval_node((*value).clone(), scope.clone());
 
+
         let ty_res = match ty {
             None => None,
-            Some(v) => Some(scope.r().find_type(
-                v.value.into_type().unwrap().into(),
-                Some(v.span),
-                None
-            ))
+            Some(v) => {
+                let (tn, tg) = v.value.into_type().unwrap();
+                Some(scope.r().find_type(
+                    tn.into(),
+                    tg,
+                    Some(v.span),
+                    None
+                ))
+            }
         };
 
         scope.w().declare_variable(name, ev, is_immut, Some(node.span), ty_res);
@@ -345,6 +368,96 @@ impl Interpreter {
         }
 
         ret
+    }
+
+    fn eval_function(&self, node: ASTNode, scope: Arw<RuntimeScope>) -> RuntimeValue {
+        let (arg_names, arg_types, ret_type, body) = node.value.into_function().unwrap();
+
+        let types: Vec<FinalizedDataType> = arg_types.iter().map(|x| {
+            let (ty, tg) = x.value.clone().into_type().unwrap();
+            scope.r().find_type(
+                ty.into(),
+                tg,
+                Some(x.span),
+                None
+            )
+        }).collect();
+        let ret_type = {
+            let (ty, tg) = ret_type.value.into_type().unwrap();
+            scope.r().find_type(
+                ty.into(),
+                tg,
+                Some(ret_type.span),
+                None
+            )
+        };
+
+        let func_scope = RuntimeScope::parented(scope.clone());
+
+        RuntimeValue::Function(
+            FunctionData {
+                arg_names,
+                arg_types: types,
+                ret_type,
+                function_body: body,
+                scope: arw(func_scope)
+            }
+        )
+    }
+
+    fn eval_call(&self, node: ASTNode, scope: Arw<RuntimeScope>) -> RuntimeValue {
+        let (on, args) = node.value.into_call().unwrap();
+
+        let o_span = on.span;
+        let fun = self.eval_node(on.unbox(), scope.clone());
+
+        match fun {
+            RuntimeValue::Function(fd) => {
+                let fn_scope = arw(RuntimeScope::parented(fd.scope.clone()));
+
+                if args.len() != fd.arg_names.len() {
+                    Log::err(format!("Expected {} arguments, found {}.", fd.arg_names.len(), args.len()), LogOrigin::Interpret);
+                    Log::trace_span(node.span);
+                    Control::exit();
+                }
+
+                let args_ev: Vec<RuntimeValue> = args.into_iter().map(|x| self.eval_node(x, scope.clone())).collect();
+
+                for i in 0..(fd.arg_types.len()) {
+                    let ty = &fd.arg_types[i];
+                    let nm = &fd.arg_names[i];
+
+                    if !ty.call_matches(&args_ev[i]) {
+                        Log::err(format!("The type of the provided argument [{}] {} does not match the expected type {}.", i,
+                            scope.r().try_match(&args_ev[i]).unwrap().visual_name, fd.arg_types[i].vis()
+                        ), LogOrigin::Interpret);
+                        Log::trace_span(node.span);
+                        Control::exit();
+                    }
+
+                    fn_scope.w().declare_variable(
+                        *nm, args_ev[i].clone(), true, None, Some(fd.arg_types[i].clone())
+                    );
+                }
+
+                let e = self.eval_node(fd.function_body.unbox(), fn_scope);
+
+                if !fd.ret_type.call_matches(&e) {
+                    Log::err(format!("The returned value of type {} does not match the expected type {}.",
+                                     scope.r().try_match(&e).unwrap().visual_name, fd.ret_type.vis()
+                    ), LogOrigin::Interpret);
+                    Log::trace_span(node.span);
+                    Control::exit();
+                }
+
+                e
+            }
+            _ => {
+                Log::err("Cannot get a callable.".to_string(), LogOrigin::Interpret);
+                Log::trace_span(o_span);
+                Control::exit();
+            }
+        }
     }
 }
 

@@ -58,10 +58,27 @@ fn main() {
             kind BuiltIn
         }
     };
+    let fnc = type_signature! {
+        Fnc {
+            match |t, v| { matches!(v, RuntimeValue::Function(_) )},
+            kind BuiltIn,
+            finalized |t, v| {
+                matches!(v, RuntimeValue::Function(fd) if fd.matches_generics(&t.generics))
+            }
+        }
+    };
+    let unit = type_signature! {
+        Uni {
+            match |t, v| { matches!(v, RuntimeValue::Unit) },
+            kind BuiltIn
+        }
+    };
 
     GlobalTypes::add_type(numerics);
     GlobalTypes::add_type(string);
     GlobalTypes::add_type(bool);
+    GlobalTypes::add_type(fnc);
+    GlobalTypes::add_type(unit);
 
     let ast = Parser { tokens: tk }.ast();
 

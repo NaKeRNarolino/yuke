@@ -1,18 +1,23 @@
+use std::cmp::PartialEq;
 use std::ops::{Add, Div, Mul, Rem, Sub};
 use std::sync::Arc;
+use crate::interpret::RuntimeScope;
 use crate::lexer::structs::Span;
 use crate::log::{Control, Log, LogOrigin};
+use crate::parser::structs::ASTNode;
 use crate::store::Atom;
-use crate::typed::DataTypeSignature;
-use crate::util::Rw;
+use crate::typed::{DataTypeSignature, FinalizedDataType};
+use crate::util::{Arw, Rw};
 
 #[derive(Debug, Clone)]
 pub enum RuntimeValue {
     Number(f64),
     String(String),
     Boolean(bool),
+    Function(FunctionData),
     Unit
 }
+
 
 pub trait BinExpAdd {
     type Output;
@@ -240,13 +245,44 @@ impl BinExpLogicals for RuntimeValue {
     }
 }
 
+#[derive(Debug)]
 pub struct Variable {
     pub(crate) name: Atom,
     pub(crate) value: Rw<RuntimeValue>,
     pub(crate) is_immut: bool,
-    pub ty: Arc<DataTypeSignature>
+    pub ty: FinalizedDataType
 }
 
 pub enum AssignmentProperty {
     VariableOrFunction(Atom)
+}
+
+#[derive(Clone, Debug)]
+pub struct FunctionData {
+    pub arg_names: Vec<Atom>,
+    pub arg_types: Vec<FinalizedDataType>,
+    pub ret_type: FinalizedDataType,
+    pub function_body: Box<ASTNode>,
+    pub scope: Arw<RuntimeScope>
+}
+
+
+impl FunctionData {
+    pub fn matches_generics(&self, generics: &Vec<FinalizedDataType>) -> bool {
+        if generics.len() != self.arg_types.len() + 1 {
+            return false
+        }
+
+        if generics.last().unwrap() != &self.ret_type {
+            return false
+        }
+
+        for i in 0..(generics.len() - 1) {
+            if generics[i] != self.arg_types[i] {
+                return false
+            }
+        }
+
+        true
+    }
 }
