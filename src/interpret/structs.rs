@@ -1,6 +1,3 @@
-use std::cmp::PartialEq;
-use std::ops::{Add, Div, Mul, Rem, Sub};
-use std::sync::Arc;
 use crate::interpret::RuntimeScope;
 use crate::lexer::structs::Span;
 use crate::log::{Control, Log, LogOrigin};
@@ -8,16 +5,24 @@ use crate::parser::structs::ASTNode;
 use crate::store::Atom;
 use crate::typed::{DataTypeSignature, FinalizedDataType};
 use crate::util::{Arw, Rw};
+use enum_as_inner::EnumAsInner;
+use std::cmp::PartialEq;
+use std::collections::HashMap;
+use std::ops::{Add, Div, Mul, Rem, Sub};
+use std::sync::Arc;
+use uuid::Uuid;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, EnumAsInner)]
 pub enum RuntimeValue {
     Number(f64),
     String(String),
     Boolean(bool),
     Function(FunctionData),
-    Unit
+    Type(TypeData),
+    Complex(ComplexData),
+    Array(ArrayData),
+    Unit,
 }
-
 
 pub trait BinExpAdd {
     type Output;
@@ -62,8 +67,6 @@ pub trait BinExpLogicals {
     fn l_or(self, rhs: Self, trace: Span) -> Self::Output;
 }
 
-
-
 impl BinExpAdd for RuntimeValue {
     type Output = RuntimeValue;
 
@@ -72,7 +75,10 @@ impl BinExpAdd for RuntimeValue {
             (RuntimeValue::Number(x), RuntimeValue::Number(y)) => RuntimeValue::Number(x + y),
             (RuntimeValue::Boolean(x), RuntimeValue::Boolean(y)) => RuntimeValue::Boolean(x || y),
             (f, s) => {
-                Log::err(format!("Operation '+' is not implemented for {:?} and {:?}.", f, s), LogOrigin::Interpret);
+                Log::err(
+                    format!("Operation '+' is not implemented for {:?} and {:?}.", f, s),
+                    LogOrigin::Interpret,
+                );
                 Log::trace_span(trace);
                 Control::exit();
             }
@@ -80,19 +86,21 @@ impl BinExpAdd for RuntimeValue {
     }
 }
 
-
 impl BinExpMul for RuntimeValue {
     type Output = RuntimeValue;
 
     fn mul(self, rhs: Self, trace: Span) -> Self::Output {
         match (self, rhs) {
             (RuntimeValue::Number(x), RuntimeValue::Number(y)) => RuntimeValue::Number(x * y),
-            (
-                RuntimeValue::String(x), RuntimeValue::Number(y)
-            ) => RuntimeValue::String(x.repeat(y.floor() as usize)),
+            (RuntimeValue::String(x), RuntimeValue::Number(y)) => {
+                RuntimeValue::String(x.repeat(y.floor() as usize))
+            }
             (RuntimeValue::Boolean(x), RuntimeValue::Boolean(y)) => RuntimeValue::Boolean(x && y),
             (f, s) => {
-                Log::err(format!("Operation '*' is not implemented for {:?} and {:?}.", f, s), LogOrigin::Interpret);
+                Log::err(
+                    format!("Operation '*' is not implemented for {:?} and {:?}.", f, s),
+                    LogOrigin::Interpret,
+                );
                 Log::trace_span(trace);
                 Control::exit();
             }
@@ -107,7 +115,10 @@ impl BinExpDiv for RuntimeValue {
         match (self, rhs) {
             (RuntimeValue::Number(x), RuntimeValue::Number(y)) => RuntimeValue::Number(x / y),
             (f, s) => {
-                Log::err(format!("Operation '/' is not implemented for {:?} and {:?}.", f, s), LogOrigin::Interpret);
+                Log::err(
+                    format!("Operation '/' is not implemented for {:?} and {:?}.", f, s),
+                    LogOrigin::Interpret,
+                );
                 Log::trace_span(trace);
                 Control::exit();
             }
@@ -122,7 +133,10 @@ impl BinExpSub for RuntimeValue {
         match (self, rhs) {
             (RuntimeValue::Number(x), RuntimeValue::Number(y)) => RuntimeValue::Number(x - y),
             (f, s) => {
-                Log::err(format!("Operation '-' is not implemented for {:?} and {:?}.", f, s), LogOrigin::Interpret);
+                Log::err(
+                    format!("Operation '-' is not implemented for {:?} and {:?}.", f, s),
+                    LogOrigin::Interpret,
+                );
                 Log::trace_span(trace);
                 Control::exit();
             }
@@ -137,7 +151,10 @@ impl BinExpRem for RuntimeValue {
         match (self, rhs) {
             (RuntimeValue::Number(x), RuntimeValue::Number(y)) => RuntimeValue::Number(x % y),
             (f, s) => {
-                Log::err(format!("Operation '%' is not implemented for {:?} and {:?}.", f, s), LogOrigin::Interpret);
+                Log::err(
+                    format!("Operation '%' is not implemented for {:?} and {:?}.", f, s),
+                    LogOrigin::Interpret,
+                );
                 Log::trace_span(trace);
                 Control::exit();
             }
@@ -152,7 +169,10 @@ impl BinExpRelations for RuntimeValue {
         match (self, rhs) {
             (RuntimeValue::Number(x), RuntimeValue::Number(y)) => RuntimeValue::Boolean(x > y),
             (f, s) => {
-                Log::err(format!("Operation '>' is not implemented for {:?} and {:?}.", f, s), LogOrigin::Interpret);
+                Log::err(
+                    format!("Operation '>' is not implemented for {:?} and {:?}.", f, s),
+                    LogOrigin::Interpret,
+                );
                 Log::trace_span(trace);
                 Control::exit();
             }
@@ -163,7 +183,10 @@ impl BinExpRelations for RuntimeValue {
         match (self, rhs) {
             (RuntimeValue::Number(x), RuntimeValue::Number(y)) => RuntimeValue::Boolean(x < y),
             (f, s) => {
-                Log::err(format!("Operation '<' is not implemented for {:?} and {:?}.", f, s), LogOrigin::Interpret);
+                Log::err(
+                    format!("Operation '<' is not implemented for {:?} and {:?}.", f, s),
+                    LogOrigin::Interpret,
+                );
                 Log::trace_span(trace);
                 Control::exit();
             }
@@ -174,7 +197,10 @@ impl BinExpRelations for RuntimeValue {
         match (self, rhs) {
             (RuntimeValue::Number(x), RuntimeValue::Number(y)) => RuntimeValue::Boolean(x >= y),
             (f, s) => {
-                Log::err(format!("Operation '>=' is not implemented for {:?} and {:?}.", f, s), LogOrigin::Interpret);
+                Log::err(
+                    format!("Operation '>=' is not implemented for {:?} and {:?}.", f, s),
+                    LogOrigin::Interpret,
+                );
                 Log::trace_span(trace);
                 Control::exit();
             }
@@ -185,7 +211,10 @@ impl BinExpRelations for RuntimeValue {
         match (self, rhs) {
             (RuntimeValue::Number(x), RuntimeValue::Number(y)) => RuntimeValue::Boolean(x <= y),
             (f, s) => {
-                Log::err(format!("Operation '<=' is not implemented for {:?} and {:?}.", f, s), LogOrigin::Interpret);
+                Log::err(
+                    format!("Operation '<=' is not implemented for {:?} and {:?}.", f, s),
+                    LogOrigin::Interpret,
+                );
                 Log::trace_span(trace);
                 Control::exit();
             }
@@ -198,7 +227,10 @@ impl BinExpRelations for RuntimeValue {
             (RuntimeValue::String(x), RuntimeValue::String(y)) => RuntimeValue::Boolean(x == y),
             (RuntimeValue::Boolean(x), RuntimeValue::Boolean(y)) => RuntimeValue::Boolean(x == y),
             (f, s) => {
-                Log::err(format!("Operation '==' is not implemented for {:?} and {:?}.", f, s), LogOrigin::Interpret);
+                Log::err(
+                    format!("Operation '==' is not implemented for {:?} and {:?}.", f, s),
+                    LogOrigin::Interpret,
+                );
                 Log::trace_span(trace);
                 Control::exit();
             }
@@ -211,7 +243,10 @@ impl BinExpRelations for RuntimeValue {
             (RuntimeValue::String(x), RuntimeValue::String(y)) => RuntimeValue::Boolean(x != y),
             (RuntimeValue::Boolean(x), RuntimeValue::Boolean(y)) => RuntimeValue::Boolean(x != y),
             (f, s) => {
-                Log::err(format!("Operation '!=' is not implemented for {:?} and {:?}.", f, s), LogOrigin::Interpret);
+                Log::err(
+                    format!("Operation '!=' is not implemented for {:?} and {:?}.", f, s),
+                    LogOrigin::Interpret,
+                );
                 Log::trace_span(trace);
                 Control::exit();
             }
@@ -226,7 +261,10 @@ impl BinExpLogicals for RuntimeValue {
         match (self, rhs) {
             (RuntimeValue::Boolean(x), RuntimeValue::Boolean(y)) => RuntimeValue::Boolean(x && y),
             (f, s) => {
-                Log::err(format!("Operation '&&' is not implemented for {:?} and {:?}.", f, s), LogOrigin::Interpret);
+                Log::err(
+                    format!("Operation '&&' is not implemented for {:?} and {:?}.", f, s),
+                    LogOrigin::Interpret,
+                );
                 Log::trace_span(trace);
                 Control::exit();
             }
@@ -237,7 +275,31 @@ impl BinExpLogicals for RuntimeValue {
         match (self, rhs) {
             (RuntimeValue::Boolean(x), RuntimeValue::Boolean(y)) => RuntimeValue::Boolean(x || y),
             (f, s) => {
-                Log::err(format!("Operation '||' is not implemented for {:?} and {:?}.", f, s), LogOrigin::Interpret);
+                Log::err(
+                    format!("Operation '||' is not implemented for {:?} and {:?}.", f, s),
+                    LogOrigin::Interpret,
+                );
+                Log::trace_span(trace);
+                Control::exit();
+            }
+        }
+    }
+}
+
+impl RuntimeValue {
+    pub fn index(self, rhs: Self, trace: Span) -> RuntimeValue {
+        match (self, rhs) {
+            (RuntimeValue::Array(ad), RuntimeValue::Number(v)) => {
+                ad.values[v.floor() as usize].clone()
+            }
+            (f, s) => {
+                Log::err(
+                    format!(
+                        "Operation '[?]' is not implemented for {:?} and {:?}.",
+                        f, s
+                    ),
+                    LogOrigin::Interpret,
+                );
                 Log::trace_span(trace);
                 Control::exit();
             }
@@ -250,11 +312,11 @@ pub struct Variable {
     pub(crate) name: Atom,
     pub(crate) value: Rw<RuntimeValue>,
     pub(crate) is_immut: bool,
-    pub ty: FinalizedDataType
+    pub ty: FinalizedDataType,
 }
 
 pub enum AssignmentProperty {
-    VariableOrFunction(Atom)
+    VariableOrFunction(Atom),
 }
 
 #[derive(Clone, Debug)]
@@ -263,26 +325,56 @@ pub struct FunctionData {
     pub arg_types: Vec<FinalizedDataType>,
     pub ret_type: FinalizedDataType,
     pub function_body: Box<ASTNode>,
-    pub scope: Arw<RuntimeScope>
+    pub scope: Arw<RuntimeScope>,
 }
-
 
 impl FunctionData {
     pub fn matches_generics(&self, generics: &Vec<FinalizedDataType>) -> bool {
         if generics.len() != self.arg_types.len() + 1 {
-            return false
+            return false;
         }
 
         if generics.last().unwrap() != &self.ret_type {
-            return false
+            return false;
         }
 
         for i in 0..(generics.len() - 1) {
             if generics[i] != self.arg_types[i] {
-                return false
+                return false;
             }
         }
 
         true
     }
+}
+
+#[derive(Clone, Debug)]
+pub enum TypeData {
+    Struct(StructData),
+}
+
+#[derive(Clone, Debug)]
+pub struct StructData {
+    pub prop_names: Vec<Atom>,
+    pub prop_types: Vec<FinalizedDataType>,
+    pub uuid: Uuid,
+}
+
+#[derive(Clone, Debug)]
+pub enum ComplexData {
+    Struct(ComplexStruct),
+}
+
+#[derive(Clone, Debug)]
+pub struct ComplexStruct {
+    pub name: Atom,
+    pub prop_names: Vec<Atom>,
+    pub prop_types: Vec<FinalizedDataType>,
+    pub data: HashMap<Atom, RuntimeValue>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ArrayData {
+    pub ty: FinalizedDataType,
+    pub values: Vec<RuntimeValue>,
 }

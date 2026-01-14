@@ -1,9 +1,9 @@
-use std::fmt::Display;
-use std::process::exit;
-use colored::Colorize;
 use crate::lexer::structs::{Span, Token};
 use crate::store::AtomStorage;
 use crate::store::sourcemap::SourceMaps;
+use colored::Colorize;
+use std::fmt::Display;
+use std::process::exit;
 
 pub struct Log;
 
@@ -11,17 +11,21 @@ pub enum LogOrigin {
     Parse,
     Interpret,
     StaticAnalysis,
-    Unnamed
+    Unnamed,
 }
 
 impl Display for LogOrigin {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", match self {
-            LogOrigin::Parse => "Parsing",
-            LogOrigin::Interpret => "Interpreting",
-            LogOrigin::StaticAnalysis => "Static Analysis",
-            LogOrigin::Unnamed => "Unnamed"
-        })
+        write!(
+            f,
+            "{}",
+            match self {
+                LogOrigin::Parse => "Parsing",
+                LogOrigin::Interpret => "Interpreting",
+                LogOrigin::StaticAnalysis => "Static Analysis",
+                LogOrigin::Unnamed => "Unnamed",
+            }
+        )
     }
 }
 
@@ -55,11 +59,11 @@ impl Log {
 
     pub fn trace_span(span: Span) {
         let line = span.start.line;
-        let c1 = span.start.column;
-        let c2 = span.end.column;
         let source = SourceMaps::get(&span.file_name);
 
         let line = source.get(line - 1).unwrap();
+        let c1 = span.start.column.clamp(0, line.len());
+        let c2 = span.end.column.clamp(0, line.len());
 
         let mut s1 = (&line[0..c1 - 1]).to_string();
         let mut s2 = (&line[c1 - 1..c2]).to_string();
@@ -67,24 +71,29 @@ impl Log {
 
         if c1 == c2 {
             if c1 != 0 {
-                s1 = (&line[0..c1-1]).to_string();
+                s1 = (&line[0..c1 - 1]).to_string();
                 let c = line.chars().collect::<Vec<char>>();
                 let k = c.get(c1 - 1).unwrap().clone().to_string().clone();
                 s2 = k.to_string();
             }
         }
 
-        println!("| {} at {}:{}{} :",
-                 AtomStorage::string(span.file_name).unwrap().green(),
-                span.start.line.to_string().green(),
-                 (span.start.column + 1).to_string().green(),
-            if c1 != c2 { format!(" to {}:{}",
-                    span.end.line.to_string().green(),
-                    (span.end.column + 1).to_string().green()) } else { "".to_string() }
-        );
         println!(
-            "> {}{}{}", s1, s2.green(), s3
+            "| {} at {}:{}{} :",
+            AtomStorage::string(span.file_name).unwrap().green(),
+            span.start.line.to_string().green(),
+            (span.start.column + 1).to_string().green(),
+            if c1 != c2 {
+                format!(
+                    " to {}:{}",
+                    span.end.line.to_string().green(),
+                    (span.end.column + 1).to_string().green()
+                )
+            } else {
+                "".to_string()
+            }
         );
+        println!("> {}{}{}", s1, s2.green(), s3);
     }
 }
 

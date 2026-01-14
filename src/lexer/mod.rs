@@ -1,9 +1,12 @@
 use std::collections::VecDeque;
 
-use crate::lexer::structs::{Direction, Location, SignType, Token, TokenValue, RESERVED_KEYWORDS, SIGN_CONVERSIONS, SIMPLE_OPERATORS, SIMPLE_SIGNS, OnlyLocation, Span};
-use regex::RegexBuilder;
-use crate::store::{AtomStorage, AtomStorageError};
+use crate::lexer::structs::{
+    Direction, Location, OnlyLocation, RESERVED_KEYWORDS, SIGN_CONVERSIONS, SIMPLE_OPERATORS,
+    SIMPLE_SIGNS, SignType, Span, Token, TokenValue,
+};
 use crate::store::sourcemap::SourceMaps;
+use crate::store::{AtomStorage, AtomStorageError};
+use regex::RegexBuilder;
 
 pub mod structs;
 
@@ -14,15 +17,11 @@ fn is_skippable(input: char) -> bool {
 fn resolve_string_to_token(input: String) -> TokenValue {
     let atom_true = AtomStorage::atom("true".to_string());
     let atom_false = AtomStorage::atom("false".to_string());
-    let atom_input= AtomStorage::atom(input);
+    let atom_input = AtomStorage::atom(input);
     if let Some(token) = RESERVED_KEYWORDS.get(&atom_input).cloned() {
         TokenValue::Keyword(token)
     } else if atom_input == atom_true || atom_input == atom_false {
-        TokenValue::Boolean(if atom_input == atom_true {
-            true
-        } else {
-            false
-        })
+        TokenValue::Boolean(if atom_input == atom_true { true } else { false })
     } else {
         TokenValue::Identifier(atom_input)
     }
@@ -49,7 +48,8 @@ pub fn tokenize(file_name: String, raw_input: String) -> VecDeque<Token> {
     let file_name_atom = AtomStorage::atom(file_name);
 
     SourceMaps::push(
-        file_name_atom, input.clone().split("\n").map(|x| x.to_string()).collect()
+        file_name_atom,
+        input.clone().split("\n").map(|x| x.to_string()).collect(),
     );
 
     let mut input_chars: VecDeque<char> = input.chars().collect();
@@ -71,13 +71,14 @@ pub fn tokenize(file_name: String, raw_input: String) -> VecDeque<Token> {
             making_string = !making_string;
             if making_string == false {
                 tokens.push(Token {
-                    value: TokenValue::String(
-                        AtomStorage::atom(string.clone().replace("\\\"", "\""))),
+                    value: TokenValue::String(AtomStorage::atom(
+                        string.clone().replace("\\\"", "\""),
+                    )),
                     span: Span {
                         file_name: file_name_atom,
                         start: string_start_location.unwrap(),
                         end: end_location,
-                    }
+                    },
                 });
                 string = String::from("");
             }
@@ -86,9 +87,7 @@ pub fn tokenize(file_name: String, raw_input: String) -> VecDeque<Token> {
         prev_char = char;
 
         if making_string {
-            string_start_location = Some(
-                Location::only(line, column - 1)
-            );
+            string_start_location = Some(Location::only(line, column - 1));
             string.push(char);
             continue;
         }
@@ -100,7 +99,7 @@ pub fn tokenize(file_name: String, raw_input: String) -> VecDeque<Token> {
                     file_name: file_name_atom,
                     start: start_location,
                     end: end_location,
-                }
+                },
             });
             continue;
         }
@@ -122,17 +121,14 @@ pub fn tokenize(file_name: String, raw_input: String) -> VecDeque<Token> {
                     file_name: file_name_atom,
                     start: start_location,
                     end: end_location,
-                }
+                },
             });
             continue;
         }
 
         let current_token_value = if let Some(sign_type) = SIMPLE_SIGNS.get(&char).cloned() {
             Some(TokenValue::Sign(sign_type))
-        } else if let Some(op) = SIMPLE_OPERATORS
-            .get(format!("{}", char).as_str())
-            .cloned()
-        {
+        } else if let Some(op) = SIMPLE_OPERATORS.get(format!("{}", char).as_str()).cloned() {
             Some(TokenValue::Operator(op))
         } else {
             None
@@ -143,9 +139,7 @@ pub fn tokenize(file_name: String, raw_input: String) -> VecDeque<Token> {
 
             if let Some(last_token) = tokens.last_mut() {
                 for conversion in SIGN_CONVERSIONS.iter() {
-                    if conversion.first == last_token.value
-                        && conversion.second == current_value
-                    {
+                    if conversion.first == last_token.value && conversion.second == current_value {
                         found_conversion = true;
 
                         let new_span = Span {
@@ -168,7 +162,7 @@ pub fn tokenize(file_name: String, raw_input: String) -> VecDeque<Token> {
                         file_name: file_name_atom,
                         start: start_location,
                         end: end_location,
-                    }
+                    },
                 });
             }
             continue;
@@ -197,11 +191,9 @@ pub fn tokenize(file_name: String, raw_input: String) -> VecDeque<Token> {
                     file_name: file_name_atom,
                     start: start_location,
                     end: current_end_location,
-                }
+                },
             });
-        }
-
-        else if char.is_numeric() {
+        } else if char.is_numeric() {
             let mut number_str = String::from(char);
             let mut current_end_location = end_location;
 
@@ -234,7 +226,7 @@ pub fn tokenize(file_name: String, raw_input: String) -> VecDeque<Token> {
                     file_name: file_name_atom,
                     start: start_location,
                     end: current_end_location,
-                }
+                },
             });
         }
     }
@@ -251,7 +243,7 @@ pub fn tokenize(file_name: String, raw_input: String) -> VecDeque<Token> {
             file_name: file_name_atom,
             start: eof_location,
             end: eof_location,
-        }
+        },
     });
 
     tokens.into()

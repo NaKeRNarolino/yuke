@@ -1,5 +1,0 @@
-fn f(a: Num, b: Num) -> Num {
-    b * a
-}
-s
-f(10, 20)

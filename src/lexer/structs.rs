@@ -1,18 +1,20 @@
-use std::collections::HashMap;
+use crate::store::{Atom, AtomStorage};
 use collection_literals::hash;
 use enum_as_inner::EnumAsInner;
 use lazy_static::lazy_static;
-use crate::store::{Atom, AtomStorage};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Location {
     pub file_name: Atom,
-    pub line: usize, pub column: usize
+    pub line: usize,
+    pub column: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct OnlyLocation {
-    pub line: usize, pub column: usize
+    pub line: usize,
+    pub column: usize,
 }
 
 impl Location {
@@ -25,7 +27,17 @@ impl Location {
 pub struct Span {
     pub(crate) file_name: Atom,
     pub(crate) start: OnlyLocation,
-    pub(crate) end: OnlyLocation
+    pub(crate) end: OnlyLocation,
+}
+
+impl Span {
+    pub fn between(start: Span, end: Span) -> Span {
+        Span {
+            file_name: start.file_name,
+            start: start.start,
+            end: end.end,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -34,8 +46,7 @@ pub struct Token {
     pub value: TokenValue,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-#[derive(EnumAsInner)]
+#[derive(Debug, Clone, PartialEq, EnumAsInner)]
 pub enum TokenValue {
     Number(f64),
     String(Atom),
@@ -64,26 +75,25 @@ pub enum KeywordType {
     While,
     If,
     Else,
-    When
+    When,
 }
-
 
 impl TokenValue {
     pub fn is_any_assignment_operator(&self) -> bool {
-        self == &TokenValue::Operator(OperatorType::Assign) ||
-            self == &TokenValue::Operator(OperatorType::PlusAssign) ||
-            self == &TokenValue::Operator(OperatorType::MinusAssign) ||
-            self == &TokenValue::Operator(OperatorType::DivideAssign) ||
-            self == &TokenValue::Operator(OperatorType::ModuloAssign)
+        self == &TokenValue::Operator(OperatorType::Assign)
+            || self == &TokenValue::Operator(OperatorType::PlusAssign)
+            || self == &TokenValue::Operator(OperatorType::MinusAssign)
+            || self == &TokenValue::Operator(OperatorType::DivideAssign)
+            || self == &TokenValue::Operator(OperatorType::ModuloAssign)
     }
 
     pub fn is_any_relation_operator(&self) -> bool {
-        self == &TokenValue::Operator(OperatorType::Equality) ||
-            self == &TokenValue::Operator(OperatorType::Inequality) ||
-            self == &TokenValue::Operator(OperatorType::Bigger) ||
-            self == &TokenValue::Operator(OperatorType::Smaller) ||
-            self == &TokenValue::Operator(OperatorType::BiggerEqual) ||
-            self == &TokenValue::Operator(OperatorType::SmallerEqual)
+        self == &TokenValue::Operator(OperatorType::Equality)
+            || self == &TokenValue::Operator(OperatorType::Inequality)
+            || self == &TokenValue::Operator(OperatorType::Bigger)
+            || self == &TokenValue::Operator(OperatorType::Smaller)
+            || self == &TokenValue::Operator(OperatorType::BiggerEqual)
+            || self == &TokenValue::Operator(OperatorType::SmallerEqual)
     }
 }
 
@@ -275,9 +285,8 @@ pub enum OperatorType {
     DivideAssign,
     ModuloAssign,
     LogicalAnd,
-    LogicalOr
+    LogicalOr,
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SignType {
@@ -314,7 +323,6 @@ pub enum Direction {
     Open,
     Close,
 }
-
 
 pub struct TwoElementSignsConversion {
     pub first: TokenValue,

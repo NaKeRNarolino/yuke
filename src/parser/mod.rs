@@ -1,25 +1,25 @@
 pub mod structs;
 
-use std::collections::VecDeque;
+use crate::lexer::structs::{
+    Direction, KeywordType, Location, OperatorType, SignType, Span, Token, TokenValue,
+};
+use crate::log::{Control, Log, LogOrigin};
+use crate::parser::structs::{ASTNode, ASTNodeValue, IfContent};
+use crate::store::Atom;
+use std::collections::{HashMap, VecDeque};
 use std::env::args;
 use std::fmt::format;
 use std::ptr::eq;
 use thiserror::Error;
-use crate::lexer::structs::{Direction, KeywordType, Location, OperatorType, SignType, Span, Token, TokenValue};
-use crate::log::{Control, Log, LogOrigin};
-use crate::parser::structs::{ASTNode, ASTNodeValue, IfContent};
-use crate::store::Atom;
 
 pub struct Parser {
-    pub tokens: VecDeque<Token>
+    pub tokens: VecDeque<Token>,
 }
 
 #[derive(Error, Debug)]
 pub enum ParserError {
     #[error("Expected token {val:?} not found.")]
-    ExpectedTokenNotFound {
-        val: TokenValue
-    }
+    ExpectedTokenNotFound { val: TokenValue },
 }
 
 impl Parser {
@@ -30,11 +30,9 @@ impl Parser {
         while !self.tokens.is_empty() && self.curr().value != TokenValue::End {
             ast.push(self.parse());
 
-            if !self.tokens.is_empty() && self.curr().value == TokenValue::Sign(SignType::Semicolon) {
-                ast.push(ASTNode {
-                    span: self.curr().span,
-                    value: ASTNodeValue::Unit
-                });
+            if !self.tokens.is_empty() && self.curr().value == TokenValue::Sign(SignType::Semicolon)
+            {
+                ast.push(ASTNode::new(self.curr().span, ASTNodeValue::Unit));
                 self.go();
             }
         }
@@ -53,22 +51,23 @@ impl Parser {
             }
         };
 
-        ASTNode {
-            span,
-            value: ASTNodeValue::Block {
-                contents: ast
-            }
-        }
+        ASTNode::new(span, ASTNodeValue::Block { contents: ast })
     }
 
-    fn curr(&self) -> &Token { &self.tokens[0] }
+    fn curr(&self) -> &Token {
+        &self.tokens[0]
+    }
 
-    fn go(&mut self) -> Token { self.tokens.pop_front().unwrap() }
+    fn go(&mut self) -> Token {
+        self.tokens.pop_front().unwrap()
+    }
 
-    fn peek(&self) -> &Token { &self.tokens[1] }
+    fn peek(&self) -> &Token {
+        &self.tokens[1]
+    }
 
     fn parse(&mut self) -> ASTNode {
-        match &self.curr().value {
+        let v = match &self.curr().value {
             // TokenValue::Number(_) => {}
             // TokenValue::String(_) => {}
             // TokenValue::Boolean(_) => {}
@@ -79,14 +78,18 @@ impl Parser {
                 KeywordType::If => self.parse_if_expression(),
                 KeywordType::When => self.parse_when(),
                 KeywordType::Fn => self.parse_function(),
-                _ => self.parse_starting_point()
+                KeywordType::Struct => self.parse_struct_def(),
+                _ => self.parse_starting_point(),
             },
             // TokenValue::Operator(_) => {}
             // TokenValue::Sign(_) => {}
             // TokenValue::Skip => {}
             // TokenValue::End => {}
-            _ => self.parse_starting_point()
-        }
+            _ => self.parse_starting_point(),
+        };
+        //
+        // self.try_parse_struct_property(v)
+        v
     }
 
     fn parse_starting_point(&mut self) -> ASTNode {
@@ -94,12 +97,13 @@ impl Parser {
     }
 
     fn parse_assignment(&mut self) -> ASTNode {
-        let mut left = self.parse_add_expr();
+        let x = self.parse_add_expr();
+        let mut left = self.try_parse_struct_property(x);
         let start = left.span;
 
         while self.curr().value.is_any_assignment_operator() {
             if !self.curr().value.is_any_assignment_operator() {
-                break
+                break;
             }
 
             let op = self.go().value.into_operator().unwrap();
@@ -111,42 +115,42 @@ impl Parser {
                 OperatorType::PlusAssign => ASTNodeValue::BinaryExpression {
                     left: Box::new(left.clone()),
                     right: Box::new(right.clone()),
-                    op: OperatorType::Plus
+                    op: OperatorType::Plus,
                 },
                 OperatorType::MinusAssign => ASTNodeValue::BinaryExpression {
                     left: Box::new(left.clone()),
                     right: Box::new(right.clone()),
-                    op: OperatorType::Minus
+                    op: OperatorType::Minus,
                 },
                 OperatorType::MultiplyAssign => ASTNodeValue::BinaryExpression {
                     left: Box::new(left.clone()),
                     right: Box::new(right.clone()),
-                    op: OperatorType::Multiply
+                    op: OperatorType::Multiply,
                 },
                 OperatorType::DivideAssign => ASTNodeValue::BinaryExpression {
                     left: Box::new(left.clone()),
                     right: Box::new(right.clone()),
-                    op: OperatorType::Divide
+                    op: OperatorType::Divide,
                 },
                 OperatorType::ModuloAssign => ASTNodeValue::BinaryExpression {
                     left: Box::new(left.clone()),
                     right: Box::new(right.clone()),
-                    op: OperatorType::Modulo
+                    op: OperatorType::Modulo,
                 },
-                _ => unreachable!()
+                _ => unreachable!(),
             };
 
-            left = ASTNode {
-                span: Span {
+            left = ASTNode::new(
+                Span {
                     file_name: start.file_name,
                     start: start.start,
-                    end: right.span.end
+                    end: right.span.end,
                 },
-                value: ASTNodeValue::Assignment {
+                ASTNodeValue::Assignment {
                     prop: Box::new(left),
-                    value: Box::new(right)
-                }
-            }
+                    value: Box::new(right),
+                },
+            )
         }
 
         left
@@ -156,31 +160,33 @@ impl Parser {
         let mut left = self.parse_atom();
         let start = left.span;
 
-        while self.curr().value == TokenValue::Operator(OperatorType::Multiply) ||
-            self.curr().value == TokenValue::Operator(OperatorType::Divide) ||
-            self.curr().value == TokenValue::Operator(OperatorType::Modulo) {
-            if !(self.curr().value == TokenValue::Operator(OperatorType::Multiply) ||
-                self.curr().value == TokenValue::Operator(OperatorType::Divide) ||
-                self.curr().value == TokenValue::Operator(OperatorType::Modulo)) {
-                break
+        while self.curr().value == TokenValue::Operator(OperatorType::Multiply)
+            || self.curr().value == TokenValue::Operator(OperatorType::Divide)
+            || self.curr().value == TokenValue::Operator(OperatorType::Modulo)
+        {
+            if !(self.curr().value == TokenValue::Operator(OperatorType::Multiply)
+                || self.curr().value == TokenValue::Operator(OperatorType::Divide)
+                || self.curr().value == TokenValue::Operator(OperatorType::Modulo))
+            {
+                break;
             }
 
             let op = self.go().value.into_operator().unwrap();
 
             let right = self.parse_atom();
 
-            left = ASTNode {
-                span: Span {
+            left = ASTNode::new(
+                Span {
                     file_name: start.file_name,
                     start: start.start,
-                    end: right.span.end
+                    end: right.span.end,
                 },
-                value: ASTNodeValue::BinaryExpression {
+                ASTNodeValue::BinaryExpression {
                     left: Box::new(left),
                     right: Box::new(right),
-                    op
-                }
-            }
+                    op,
+                },
+            )
         }
 
         left
@@ -190,27 +196,31 @@ impl Parser {
         let mut left = self.parse_multiply_expr();
         let start = left.span;
 
-        while self.curr().value == TokenValue::Operator(OperatorType::Plus) || self.curr().value == TokenValue::Operator(OperatorType::Minus) {
-            if !(self.curr().value == TokenValue::Operator(OperatorType::Plus) || self.curr().value == TokenValue::Operator(OperatorType::Minus)) {
-                break
+        while self.curr().value == TokenValue::Operator(OperatorType::Plus)
+            || self.curr().value == TokenValue::Operator(OperatorType::Minus)
+        {
+            if !(self.curr().value == TokenValue::Operator(OperatorType::Plus)
+                || self.curr().value == TokenValue::Operator(OperatorType::Minus))
+            {
+                break;
             }
 
             let op = self.go().value.into_operator().unwrap();
 
             let right = self.parse_multiply_expr();
 
-            left = ASTNode {
-                span: Span {
+            left = ASTNode::new(
+                Span {
                     file_name: start.file_name,
                     start: start.start,
-                    end: right.span.end
+                    end: right.span.end,
                 },
-                value: ASTNodeValue::BinaryExpression {
+                ASTNodeValue::BinaryExpression {
                     left: Box::new(left),
                     right: Box::new(right),
-                    op
-                }
-            }
+                    op,
+                },
+            )
         }
 
         left
@@ -218,46 +228,44 @@ impl Parser {
 
     fn parse_atom(&mut self) -> ASTNode {
         let tk = self.go();
-        match tk.value {
-            TokenValue::Number(v) => ASTNode {
-                span: tk.span,
-                value: ASTNodeValue::Number(v)
-            },
-            TokenValue::String(v) => ASTNode {
-                span: tk.span,
-                value: ASTNodeValue::String(v)
-            },
-            TokenValue::Boolean(v) => ASTNode {
-                span: tk.span,
-                value: ASTNodeValue::Boolean(v)
-            },
-            TokenValue::Identifier(v) => self.try_parse_call(
-                ASTNode {
-                    span: tk.span,
-                    value: ASTNodeValue::Identifier(v)
-                }
-            ),
+        let node = match tk.value {
+            TokenValue::Number(v) => ASTNode::new(tk.span, ASTNodeValue::Number(v)),
+            TokenValue::String(v) => ASTNode::new(tk.span, ASTNodeValue::String(v)),
+            TokenValue::Boolean(v) => ASTNode::new(tk.span, ASTNodeValue::Boolean(v)),
+            TokenValue::Identifier(v) => ASTNode::new(tk.span, ASTNodeValue::Identifier(v)),
             TokenValue::Sign(SignType::Paren(Direction::Open)) => {
                 let expr = self.parse();
 
-                self.expected(|x| matches!(x,  TokenValue::Sign(SignType::Paren(Direction::Close))), "Expected a ')', found %s.").unwrap();
+                self.expected(
+                    |x| matches!(x, TokenValue::Sign(SignType::Paren(Direction::Close))),
+                    "Expected a ')', found %s.",
+                )
+                .unwrap();
 
                 expr
             }
+            TokenValue::Sign(SignType::Brace(Direction::Open)) => self.parse_array(tk),
             _ => {
-                Log::err(format!("Token {:?} couldn't be parsed into an atom.", &tk.value), LogOrigin::Parse);
+                Log::err(
+                    format!("Token {:?} couldn't be parsed into an atom.", &tk.value),
+                    LogOrigin::Parse,
+                );
                 Log::trace_span(tk.span);
                 Control::exit();
             }
-        }
+        };
+
+        self.parse_postfix(node)
     }
 
     fn parse_variable_declaration(&mut self, is_immut: bool) -> ASTNode {
         let start = self.go(); // let / immut
-        let ident_tk = self.expected(
-            |v| matches!(v, TokenValue::Identifier(_)),
-            "Expected an Identifier, found %s."
-        ).unwrap();
+        let ident_tk = self
+            .expected(
+                |v| matches!(v, TokenValue::Identifier(_)),
+                "Expected an Identifier, found %s.",
+            )
+            .unwrap();
 
         let ident = ident_tk.value.into_identifier().unwrap();
 
@@ -269,27 +277,40 @@ impl Parser {
             data_type = Some(Box::new(self.parse_data_type()));
         }
 
-        _ =self.expected(
+        _ = self.expected(
             |v| matches!(v, TokenValue::Operator(OperatorType::Assign)),
-            "Expected '=', found %s."
+            "Expected '=', found %s.",
         );
 
         let value = self.parse();
 
-        ASTNode {
-            span: Span { file_name: start.span.file_name, start: start.span.start, end: value.span.end },
-            value: ASTNodeValue::VariableDeclaration {
+        ASTNode::new(
+            Span {
+                file_name: start.span.file_name,
+                start: start.span.start,
+                end: value.span.end,
+            },
+            ASTNodeValue::VariableDeclaration {
                 name: ident,
                 value: Box::new(value),
                 immut: is_immut,
-                data_type
-            }
-        }
+                data_type,
+            },
+        )
     }
 
-    fn expected(&mut self, matches: impl Fn(&TokenValue) -> bool, reason: impl Into<String>) -> Result<Token, String> {
+    fn expected(
+        &mut self,
+        matches: impl Fn(&TokenValue) -> bool,
+        reason: impl Into<String>,
+    ) -> Result<Token, String> {
         if !matches(&self.curr().value) {
-            Log::err(reason.into().replace("%s", &format!("{:?}", &self.curr().value)), LogOrigin::Parse);
+            Log::err(
+                reason
+                    .into()
+                    .replace("%s", &format!("{:?}", &self.curr().value)),
+                LogOrigin::Parse,
+            );
             Log::trace_span(self.curr().span);
             Control::exit();
         } else {
@@ -303,25 +324,25 @@ impl Parser {
 
         while self.curr().value == TokenValue::Operator(OperatorType::LogicalOr) {
             if self.curr().value != TokenValue::Operator(OperatorType::LogicalOr) {
-                break
+                break;
             }
 
             let op = self.go().value.into_operator().unwrap();
 
             let right = self.parse_logical_and();
 
-            left = ASTNode {
-                span: Span {
+            left = ASTNode::new(
+                Span {
                     file_name: start.file_name,
                     start: start.start,
-                    end: right.span.end
+                    end: right.span.end,
                 },
-                value: ASTNodeValue::BinaryExpression {
+                ASTNodeValue::BinaryExpression {
                     op,
                     left: Box::new(left),
-                    right: Box::new(right)
-                }
-            }
+                    right: Box::new(right),
+                },
+            )
         }
 
         left
@@ -333,25 +354,25 @@ impl Parser {
 
         while self.curr().value == TokenValue::Operator(OperatorType::LogicalAnd) {
             if self.curr().value != TokenValue::Operator(OperatorType::LogicalAnd) {
-                break
+                break;
             }
 
             let op = self.go().value.into_operator().unwrap();
 
             let right = self.parse_relations();
 
-            left = ASTNode {
-                span: Span {
+            left = ASTNode::new(
+                Span {
                     file_name: start.file_name,
                     start: start.start,
-                    end: right.span.end
+                    end: right.span.end,
                 },
-                value: ASTNodeValue::BinaryExpression {
+                ASTNodeValue::BinaryExpression {
                     op,
                     left: Box::new(left),
-                    right: Box::new(right)
-                }
-            }
+                    right: Box::new(right),
+                },
+            )
         }
 
         left
@@ -363,47 +384,50 @@ impl Parser {
 
         while self.curr().value.is_any_relation_operator() {
             if !self.curr().value.is_any_relation_operator() {
-                break
+                break;
             }
 
             let op = self.go().value.into_operator().unwrap();
 
             let right = self.parse_assignment();
 
-            left = ASTNode {
-                span: Span {
+            left = ASTNode::new(
+                Span {
                     file_name: start.file_name,
                     start: start.start,
-                    end: right.span.end
+                    end: right.span.end,
                 },
-                value: ASTNodeValue::BinaryExpression {
+                ASTNodeValue::BinaryExpression {
                     op,
                     left: Box::new(left),
-                    right: Box::new(right)
-                }
-            }
+                    right: Box::new(right),
+                },
+            )
         }
 
         left
     }
 
     fn parse_code_block(&mut self) -> ASTNode {
-        let _ =self.expected(
-            |v| v == &TokenValue::Sign(SignType::CurlyBrace(Direction::Open)),
-            "Expected an '{', found %s."
-        ).unwrap();
+        let _ = self
+            .expected(
+                |v| v == &TokenValue::Sign(SignType::CurlyBrace(Direction::Open)),
+                "Expected an '{', found %s.",
+            )
+            .unwrap();
 
         let mut content = Vec::new();
         let file_name = self.tokens.front().unwrap().span.file_name;
 
-        while self.curr().value != TokenValue::Sign(SignType::CurlyBrace(Direction::Close)) && self.curr().value != TokenValue::End {
+        while self.curr().value != TokenValue::Sign(SignType::CurlyBrace(Direction::Close))
+            && self.curr().value != TokenValue::End
+        {
             content.push(self.parse());
 
-            if self.curr().value != TokenValue::Sign(SignType::CurlyBrace(Direction::Close)) && self.curr().value == TokenValue::Sign(SignType::Semicolon) {
-                content.push(ASTNode {
-                    span: self.curr().span,
-                    value: ASTNodeValue::Unit
-                });
+            if self.curr().value != TokenValue::Sign(SignType::CurlyBrace(Direction::Close))
+                && self.curr().value == TokenValue::Sign(SignType::Semicolon)
+            {
+                content.push(ASTNode::new(self.curr().span, ASTNodeValue::Unit));
                 self.go();
             }
         }
@@ -422,19 +446,16 @@ impl Parser {
             }
         };
 
-        let lst =self.expected(
-            |v| v == &TokenValue::Sign(SignType::CurlyBrace(Direction::Close)),
-            "Expected an '}', found %s."
-        ).unwrap();
+        let lst = self
+            .expected(
+                |v| v == &TokenValue::Sign(SignType::CurlyBrace(Direction::Close)),
+                "Expected an '}', found %s.",
+            )
+            .unwrap();
 
         span.end = lst.span.end;
 
-        ASTNode {
-            span,
-            value: ASTNodeValue::Block {
-                contents: content
-            }
-        }
+        ASTNode::new(span, ASTNodeValue::Block { contents: content })
     }
 
     fn parse_if_expression(&mut self) -> ASTNode {
@@ -449,12 +470,14 @@ impl Parser {
 
         ifs.push(IfContent {
             condition: Box::new(condition),
-            block: Box::new(block)
+            block: Box::new(block),
         });
 
         while self.curr().value == TokenValue::Keyword(KeywordType::Else)
-            && self.peek().value == TokenValue::Keyword(KeywordType::If) {
-            self.go(); self.go(); // `else` `if`
+            && self.peek().value == TokenValue::Keyword(KeywordType::If)
+        {
+            self.go();
+            self.go(); // `else` `if`
 
             let c = self.parse();
             let b = self.parse_code_block();
@@ -463,7 +486,7 @@ impl Parser {
 
             ifs.push(IfContent {
                 condition: Box::new(c),
-                block: Box::new(b)
+                block: Box::new(b),
             });
         }
 
@@ -476,20 +499,22 @@ impl Parser {
             or_else = Some(Box::new(b));
         }
 
-        ASTNode {
-            span: f_span,
-            value: ASTNodeValue::If {
-                ifs,
-                or_else
-            }
-        }
+        ASTNode::new(f_span, ASTNodeValue::If { ifs, or_else })
     }
 
     fn parse_data_type(&mut self) -> ASTNode {
-        let ident_tk = self.expected(
-            |v| matches!(v, TokenValue::Identifier(_)),
-            "Expected an Identifier, found %s."
-        ).unwrap();
+        let mut dynamic = false;
+        if self.curr().value == TokenValue::Sign(SignType::QuestionMk) {
+            self.go();
+            dynamic = true;
+        }
+
+        let ident_tk = self
+            .expected(
+                |v| matches!(v, TokenValue::Identifier(_)),
+                "Expected an Identifier, found %s.",
+            )
+            .unwrap();
 
         let ident = ident_tk.value.into_identifier().unwrap();
 
@@ -500,10 +525,12 @@ impl Parser {
         while self.curr().value == TokenValue::Sign(SignType::Dot) {
             self.go();
 
-            let i_tk = self.expected(
-                |v| matches!(v, TokenValue::Identifier(_)),
-                "Expected an Identifier, found %s."
-            ).unwrap();
+            let i_tk = self
+                .expected(
+                    |v| matches!(v, TokenValue::Identifier(_)),
+                    "Expected an Identifier, found %s.",
+                )
+                .unwrap();
 
             span.end = i_tk.span.end;
             let i = i_tk.value.into_identifier().unwrap();
@@ -518,7 +545,10 @@ impl Parser {
 
             generics.push(self.parse_data_type());
 
-            while self.curr().value == TokenValue::Sign(SignType::Comma) && self.not_end() && self.curr().value != TokenValue::Operator(OperatorType::Bigger) {
+            while self.curr().value == TokenValue::Sign(SignType::Comma)
+                && self.not_end()
+                && self.curr().value != TokenValue::Operator(OperatorType::Bigger)
+            {
                 self.go();
 
                 let tp = self.parse_data_type();
@@ -529,18 +559,20 @@ impl Parser {
             }
 
             self.expected(
-                |v| { matches!(v,  TokenValue::Operator(OperatorType::Bigger) )},
-                "Expected '>', found %s."
-            ).unwrap();
+                |v| matches!(v, TokenValue::Operator(OperatorType::Bigger)),
+                "Expected '>', found %s.",
+            )
+            .unwrap();
         }
 
-        ASTNode {
+        ASTNode::new(
             span,
-            value: ASTNodeValue::Type {
+            ASTNodeValue::Type {
+                dynamic,
                 content: res,
-                generics
-            }
-        }
+                generics,
+            },
+        )
     }
 
     fn parse_when(&mut self) -> ASTNode {
@@ -548,52 +580,57 @@ impl Parser {
 
         let value = self.parse();
 
-        let _ =self.expected(
-            |v| v == &TokenValue::Sign(SignType::CurlyBrace(Direction::Open)),
-            "Expected an '{', found %s."
-        ).unwrap();
+        let _ = self
+            .expected(
+                |v| v == &TokenValue::Sign(SignType::CurlyBrace(Direction::Open)),
+                "Expected an '{', found %s.",
+            )
+            .unwrap();
 
         let mut ifs: Vec<IfContent> = Vec::new();
 
-        while self.curr().value != TokenValue::Sign(SignType::CurlyBrace(Direction::Close)) && self.curr().value != TokenValue::End {
+        while self.curr().value != TokenValue::Sign(SignType::CurlyBrace(Direction::Close))
+            && self.curr().value != TokenValue::End
+        {
             let eq_to = self.parse();
 
             let block = self.parse_code_block();
 
             ifs.push(IfContent {
-                block: Box::new(block), condition: Box::new(eq_to)
+                block: Box::new(block),
+                condition: Box::new(eq_to),
             })
         }
 
-        let mut last =self.expected(
-            |v| v == &TokenValue::Sign(SignType::CurlyBrace(Direction::Close)),
-            "Expected an '}', found %s."
-        ).unwrap();
+        let mut last = self
+            .expected(
+                |v| v == &TokenValue::Sign(SignType::CurlyBrace(Direction::Close)),
+                "Expected an '}', found %s.",
+            )
+            .unwrap();
 
         let mut or_else: Option<Box<ASTNode>> = None;
 
         if self.curr().value == TokenValue::Keyword(KeywordType::Else) {
             self.go(); // `else`
 
-            let bl =
-                self.parse_code_block();
+            let bl = self.parse_code_block();
             last.span.end = bl.span.end;
-            or_else = Some(Box::new(
-                bl
-            ));
+            or_else = Some(Box::new(bl));
         }
 
-        ASTNode {
-            span: Span {
+        ASTNode::new(
+            Span {
                 file_name: wn.span.file_name,
                 start: wn.span.start,
-                end: last.span.end
+                end: last.span.end,
             },
-            value: ASTNodeValue::When {
+            ASTNodeValue::When {
                 value: Box::new(value),
-                ifs, or_else
-            }
-        }
+                ifs,
+                or_else,
+            },
+        )
     }
 
     fn parse_function(&mut self) -> ASTNode {
@@ -603,46 +640,53 @@ impl Parser {
         let mut named: Option<Atom> = None;
 
         if matches!(self.curr().value, TokenValue::Identifier(_)) {
-            named = Some(
-                self.go().value.into_identifier().unwrap()
-            );
+            named = Some(self.go().value.into_identifier().unwrap());
         }
 
         self.expected(
             |v| matches!(v, TokenValue::Sign(SignType::Paren(Direction::Open))),
-            "Expected an '(', found %s."
-        ).unwrap();
+            "Expected an '(', found %s.",
+        )
+        .unwrap();
 
         let mut args_name: Vec<Atom> = Vec::new();
 
         let mut args_type: Vec<ASTNode> = Vec::new();
 
         if self.curr().value != TokenValue::Sign(SignType::Paren(Direction::Close)) {
-            let ident_tk = self.expected(
-                |v| matches!(v, TokenValue::Identifier(_)),
-                "Expected an Identifier, found %s."
-            ).unwrap();
+            let ident_tk = self
+                .expected(
+                    |v| matches!(v, TokenValue::Identifier(_)),
+                    "Expected an Identifier, found %s.",
+                )
+                .unwrap();
             self.expected(
                 |v| matches!(v, TokenValue::Sign(SignType::Colon)),
-                "Expected a ':', found %s."
-            ).unwrap();
+                "Expected a ':', found %s.",
+            )
+            .unwrap();
             let ty = self.parse_data_type();
 
             args_name.push(ident_tk.value.into_identifier().unwrap());
             args_type.push(ty);
 
-            while self.not_end() && self.curr().value == TokenValue::Sign(SignType::Comma)
-                && self.curr().value != TokenValue::Sign(SignType::Paren(Direction::Close)) {
+            while self.not_end()
+                && self.curr().value == TokenValue::Sign(SignType::Comma)
+                && self.curr().value != TokenValue::Sign(SignType::Paren(Direction::Close))
+            {
                 self.go();
 
-                let ident_tk = self.expected(
-                    |v| matches!(v, TokenValue::Identifier(_)),
-                    "Expected an Identifier, found %s."
-                ).unwrap();
+                let ident_tk = self
+                    .expected(
+                        |v| matches!(v, TokenValue::Identifier(_)),
+                        "Expected an Identifier, found %s.",
+                    )
+                    .unwrap();
                 self.expected(
                     |v| matches!(v, TokenValue::Sign(SignType::Colon)),
-                    "Expected a ':', found %s."
-                ).unwrap();
+                    "Expected a ':', found %s.",
+                )
+                .unwrap();
                 let ty = self.parse_data_type();
 
                 args_name.push(ident_tk.value.into_identifier().unwrap());
@@ -652,47 +696,51 @@ impl Parser {
 
         self.expected(
             |v| matches!(v, TokenValue::Sign(SignType::Paren(Direction::Close))),
-            "Expected an ')', found %s."
-        ).unwrap();
+            "Expected an ')', found %s.",
+        )
+        .unwrap();
 
         self.expected(
             |v| matches!(v, TokenValue::Sign(SignType::Arrow)),
-            "Expected an '->', found %s."
-        ).unwrap();
+            "Expected an '->', found %s.",
+        )
+        .unwrap();
 
         let ret = self.parse_data_type();
 
         let body = self.parse_code_block();
 
-        let fun = ASTNode {
-            span: Span {
+        let fun = ASTNode::new(
+            Span {
                 file_name: f.span.file_name,
                 start: f.span.start,
                 end: f.span.end,
             },
-            value: ASTNodeValue::Function {
+            ASTNodeValue::Function {
                 arg_names: args_name,
                 arg_types: args_type,
                 body: Box::new(body),
                 ret_type: Box::new(ret),
-            }
-        };
+            },
+        );
         if let Some(name) = named {
-            ASTNode {
-                span: fun.span,
-                value: ASTNodeValue::VariableDeclaration {
+            ASTNode::new(
+                fun.span,
+                ASTNodeValue::VariableDeclaration {
                     name,
                     immut: true,
                     value: Box::new(fun),
-                    data_type: None
-                }
-            }
+                    data_type: None,
+                },
+            )
         } else {
             fun
         }
     }
 
-    fn not_end(&self) -> bool { self.curr().value != TokenValue::End }
+    fn not_end(&self) -> bool {
+        self.curr().value != TokenValue::End
+    }
 
     fn try_parse_call(&mut self, call: ASTNode) -> ASTNode {
         if self.curr().value == TokenValue::Sign(SignType::Paren(Direction::Open)) {
@@ -703,43 +751,310 @@ impl Parser {
 
                 let mut sp = call.span;
                 sp.end = l.span.end;
-                return ASTNode {
-                    span: sp,
-                    value: ASTNodeValue::Call {
+                return ASTNode::new(
+                    sp,
+                    ASTNodeValue::Call {
                         args: Vec::new(),
-                        on: Box::new(call)
-                    }
-                }
+                        on: Box::new(call),
+                    },
+                );
             }
 
             let mut args = Vec::new();
 
             args.push(self.parse());
 
-            while self.not_end() && self.curr().value == TokenValue::Sign(SignType::Comma)
-             && self.curr().value != TokenValue::Sign(SignType::Paren(Direction::Close)) {
+            while self.not_end()
+                && self.curr().value == TokenValue::Sign(SignType::Comma)
+                && self.curr().value != TokenValue::Sign(SignType::Paren(Direction::Close))
+            {
                 self.go(); // `,`
 
                 args.push(self.parse());
             }
 
-            let l = self.expected(
-                |v| matches!(v, TokenValue::Sign(SignType::Paren(Direction::Close))),
-                "Expected an ')', found %s."
-            ).unwrap();
+            let l = self
+                .expected(
+                    |v| matches!(v, TokenValue::Sign(SignType::Paren(Direction::Close))),
+                    "Expected an ')', found %s.",
+                )
+                .unwrap();
 
             let mut sp = call.span;
             sp.end = l.span.end;
 
-            ASTNode {
-                span: sp,
-                value: ASTNodeValue::Call {
+            ASTNode::new(
+                sp,
+                ASTNodeValue::Call {
                     args,
-                    on: Box::new(call)
-                }
-            }
+                    on: Box::new(call),
+                },
+            )
         } else {
             call
         }
+    }
+
+    fn parse_struct_def(&mut self) -> ASTNode {
+        let f = self.go(); // `struct`
+
+        self.expected(
+            |v| matches!(v, TokenValue::Sign(SignType::CurlyBrace(Direction::Open))),
+            "Expected an '{', found %s.",
+        )
+        .unwrap();
+
+        let mut args_name: Vec<Atom> = Vec::new();
+
+        let mut args_type: Vec<ASTNode> = Vec::new();
+
+        if self.curr().value != TokenValue::Sign(SignType::CurlyBrace(Direction::Close)) {
+            let ident_tk = self
+                .expected(
+                    |v| matches!(v, TokenValue::Identifier(_)),
+                    "Expected an Identifier, found %s.",
+                )
+                .unwrap();
+            self.expected(
+                |v| matches!(v, TokenValue::Sign(SignType::Colon)),
+                "Expected a ':', found %s.",
+            )
+            .unwrap();
+            let ty = self.parse_data_type();
+
+            args_name.push(ident_tk.value.into_identifier().unwrap());
+            args_type.push(ty);
+
+            while self.not_end()
+                && self.curr().value == TokenValue::Sign(SignType::Comma)
+                && self.curr().value != TokenValue::Sign(SignType::CurlyBrace(Direction::Close))
+            {
+                self.go();
+
+                let ident_tk = self
+                    .expected(
+                        |v| matches!(v, TokenValue::Identifier(_)),
+                        "Expected an Identifier, found %s.",
+                    )
+                    .unwrap();
+                self.expected(
+                    |v| matches!(v, TokenValue::Sign(SignType::Colon)),
+                    "Expected a ':', found %s.",
+                )
+                .unwrap();
+                let ty = self.parse_data_type();
+
+                args_name.push(ident_tk.value.into_identifier().unwrap());
+                args_type.push(ty);
+            }
+        }
+
+        let l = self
+            .expected(
+                |v| matches!(v, TokenValue::Sign(SignType::CurlyBrace(Direction::Close))),
+                "Expected an '}', found %s.",
+            )
+            .unwrap();
+
+        ASTNode::new(
+            Span {
+                file_name: f.span.file_name,
+                start: f.span.start,
+                end: l.span.end,
+            },
+            ASTNodeValue::StructDefinition {
+                prop_names: args_name,
+                prop_types: args_type,
+            },
+        )
+    }
+
+    fn try_parse_struct_creation(&mut self, name: ASTNode) -> ASTNode {
+        if self.curr().value == TokenValue::Sign(SignType::Dot)
+            && self.peek().value == TokenValue::Sign(SignType::CurlyBrace(Direction::Open))
+        {
+            self.go();
+            self.go();
+
+            let mut values: HashMap<Atom, ASTNode> = HashMap::new();
+
+            if self.curr().value != TokenValue::Sign(SignType::CurlyBrace(Direction::Close)) {
+                let ident_tk = self
+                    .expected(
+                        |v| matches!(v, TokenValue::Identifier(_)),
+                        "Expected an Identifier, found %s.",
+                    )
+                    .unwrap();
+                self.expected(
+                    |v| matches!(v, TokenValue::Sign(SignType::Colon)),
+                    "Expected a ':', found %s.",
+                )
+                .unwrap();
+                let ty = self.parse();
+
+                values.insert(ident_tk.value.into_identifier().unwrap(), ty);
+
+                while self.not_end()
+                    && self.curr().value == TokenValue::Sign(SignType::Comma)
+                    && self.curr().value != TokenValue::Sign(SignType::CurlyBrace(Direction::Close))
+                {
+                    self.go();
+
+                    let ident_tk = self
+                        .expected(
+                            |v| matches!(v, TokenValue::Identifier(_)),
+                            "Expected an Identifier, found %s.",
+                        )
+                        .unwrap();
+                    self.expected(
+                        |v| matches!(v, TokenValue::Sign(SignType::Colon)),
+                        "Expected a ':', found %s.",
+                    )
+                    .unwrap();
+                    let ty = self.parse();
+
+                    values.insert(ident_tk.value.into_identifier().unwrap(), ty);
+                }
+            }
+
+            let l = self
+                .expected(
+                    |v| matches!(v, TokenValue::Sign(SignType::CurlyBrace(Direction::Close))),
+                    "Expected an '}', found %s.",
+                )
+                .unwrap();
+
+            ASTNode::new(
+                Span::between(name.span, l.span),
+                ASTNodeValue::StructCreation {
+                    name: name.value.into_identifier().unwrap(),
+                    props: values,
+                },
+            )
+        } else {
+            name
+        }
+    }
+
+    fn try_parse_struct_property(&mut self, on: ASTNode) -> ASTNode {
+        if self.curr().value == TokenValue::Sign(SignType::Dot)
+            && matches!(self.peek().value, TokenValue::Identifier(_))
+        {
+            self.go();
+            let name_tk = self.go();
+            let name = name_tk.value.into_identifier().unwrap();
+
+            let o_span = on.span;
+            ASTNode::new(
+                Span::between(o_span, name_tk.span),
+                ASTNodeValue::PropertyAccess {
+                    on: Box::new(on),
+                    property: name,
+                },
+            )
+        } else {
+            on
+        }
+    }
+
+    fn parse_array(&mut self, tk: Token) -> ASTNode {
+        let mut ty: Option<Box<ASTNode>> = None;
+
+        if self.curr().value == TokenValue::Operator(OperatorType::Smaller) {
+            self.go();
+            ty = Some(Box::new(self.parse_data_type()));
+
+            self.expected(
+                |v| matches!(v, TokenValue::Operator(OperatorType::Bigger)),
+                "Expected a '>', found %s.",
+            )
+            .unwrap();
+        }
+
+        if self.curr().value == TokenValue::Sign(SignType::Brace(Direction::Close)) {
+            let l = self.go();
+
+            let mut sp = tk.span;
+            sp.end = l.span.end;
+            return ASTNode::new(
+                sp,
+                ASTNodeValue::ArrayDeclaration {
+                    ty,
+                    values: Vec::new(),
+                },
+            );
+        }
+
+        let mut values = Vec::new();
+
+        values.push(self.parse());
+
+        while self.not_end()
+            && self.curr().value == TokenValue::Sign(SignType::Comma)
+            && self.curr().value != TokenValue::Sign(SignType::Brace(Direction::Close))
+        {
+            self.go(); // `,`
+
+            values.push(self.parse());
+        }
+
+        let l = self
+            .expected(
+                |v| matches!(v, TokenValue::Sign(SignType::Brace(Direction::Close))),
+                "Expected an ']', found %s.",
+            )
+            .unwrap();
+
+        let mut sp = tk.span;
+        sp.end = l.span.end;
+
+        ASTNode::new(sp, ASTNodeValue::ArrayDeclaration { values, ty })
+    }
+
+    fn parse_postfix(&mut self, mut node: ASTNode) -> ASTNode {
+        loop {
+            match &self.curr().value {
+                // a.b | A.{ }
+                TokenValue::Sign(SignType::Dot) => {
+                    if matches!(
+                        self.peek().value,
+                        TokenValue::Sign(SignType::CurlyBrace(Direction::Open))
+                    ) {
+                        node = self.try_parse_struct_creation(node);
+                    } else {
+                        node = self.try_parse_struct_property(node);
+                    }
+                }
+                // a()
+                TokenValue::Sign(SignType::Paren(Direction::Open)) => {
+                    node = self.try_parse_call(node);
+                }
+                // a[..]
+                TokenValue::Sign(SignType::Brace(Direction::Open)) => {
+                    node = self.parse_array_access(node);
+                }
+                _ => break,
+            }
+        }
+        node
+    }
+
+    fn parse_array_access(&mut self, node: ASTNode) -> ASTNode {
+        let s = self.go();
+        let idx = self.parse();
+        let l = self
+            .expected(
+                |x| matches!(x, TokenValue::Sign(SignType::Brace(Direction::Close))),
+                "Expected a ']', found %s.",
+            )
+            .unwrap();
+
+        ASTNode::new(
+            Span::between(s.span, l.span),
+            ASTNodeValue::ArrayAccess {
+                on: Box::new(node),
+                index: Box::new(idx),
+            },
+        )
     }
 }

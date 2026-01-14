@@ -1,17 +1,17 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-use lazy_static::lazy_static;
 use crate::store::{Atom, AtomStorage};
 use crate::util::Rw;
+use lazy_static::lazy_static;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 pub struct SourceMaps {
-    atom_to_source: HashMap<Atom, Arc<Vec<String>>>
+    atom_to_source: HashMap<Atom, Arc<Vec<String>>>,
 }
 
 impl SourceMaps {
     fn new() -> Self {
         Self {
-            atom_to_source: HashMap::new()
+            atom_to_source: HashMap::new(),
         }
     }
 

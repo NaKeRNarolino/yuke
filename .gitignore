@@ -1,2 +1,5 @@
 /target
 /proc_macro/target
+/target_yk
+/src/vm
+/src/compile

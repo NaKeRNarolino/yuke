@@ -2,7 +2,7 @@ use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[derive(Debug)]
 pub struct Rw<T> {
-    inner: RwLock<T>
+    inner: RwLock<T>,
 }
 
 pub type Arw<T> = Arc<Rw<T>>;
@@ -14,7 +14,7 @@ pub fn arw<T>(v: T) -> Arw<T> {
 impl<T> Rw<T> {
     pub fn new(value: T) -> Self {
         Self {
-            inner: RwLock::new(value)
+            inner: RwLock::new(value),
         }
     }
 
