@@ -578,7 +578,7 @@ impl Parser {
     fn parse_when(&mut self) -> ASTNode {
         let wn = self.go(); // `when`
 
-        let value = self.parse();
+        // let value = self.parse();
 
         let _ = self
             .expected(
@@ -626,7 +626,7 @@ impl Parser {
                 end: last.span.end,
             },
             ASTNodeValue::When {
-                value: Box::new(value),
+                // value: Box::new(value),
                 ifs,
                 or_else,
             },

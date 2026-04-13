@@ -4,6 +4,7 @@ use lazy_static::lazy_static;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::sync::RwLock;
+use colored::Colorize;
 use thiserror::Error;
 
 pub struct AtomStorage {
@@ -16,7 +17,8 @@ pub struct Atom(pub usize);
 
 impl Display for Atom {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(AtomStorage::string(*self).unwrap())
+        // f.write_str()
+        f.write_fmt(format_args!("{}", AtomStorage::string(*self).unwrap().purple()))
     }
 }
 

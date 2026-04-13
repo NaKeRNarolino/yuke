@@ -67,7 +67,7 @@ pub enum ASTNodeValue {
         generics: Vec<ASTNode>,
     },
     When {
-        value: Box<ASTNode>,
+        // value: Box<ASTNode>,
         ifs: Vec<IfContent>,
         or_else: Option<Box<ASTNode>>,
     },

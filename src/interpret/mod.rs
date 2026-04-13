@@ -465,9 +465,9 @@ impl Interpreter {
     }
 
     fn eval_when(&self, node: ASTNode, scope: Arw<RuntimeScope>) -> RuntimeValue {
-        let (value, ifs, or_else) = node.value.into_when().unwrap();
+        let (ifs, or_else) = node.value.into_when().unwrap();
 
-        let ev_v = self.eval_node(value.unbox(), scope.clone());
+        // let ev_v = self.eval_node(value.unbox(), scope.clone());
 
         let mut ret = RuntimeValue::Unit;
 
@@ -478,7 +478,7 @@ impl Interpreter {
             let ev_condition = self.eval_node(stmt.condition.unbox(), scope.clone());
 
             if matches!(
-                ev_condition.eq(ev_v.clone(), sp),
+                ev_condition,
                 RuntimeValue::Boolean(true)
             ) {
                 should_run_else = false;

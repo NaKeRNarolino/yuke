@@ -4,12 +4,14 @@ use crate::lexer::structs::Span;
 use crate::log::{Control, Log, LogOrigin};
 use crate::parser::structs::ASTNode;
 use crate::store::{Atom, AtomStorage};
-use crate::util::Rw;
+use crate::util::{Rw, Unbox};
 use lazy_static::lazy_static;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::{Debug, Display, Formatter, Write};
 use std::sync::Arc;
+use colored::Colorize;
 use uuid::Uuid;
+use walrus::Data;
 
 #[derive(Clone)]
 pub struct DataTypeSignature {
@@ -37,6 +39,15 @@ pub enum DataType {
     Str,
     Uni,
     Null,
+    Typ,
+    Fnc(Vec<DataType>),
+    Dynamic { name: String, value: DynamicType },
+    Array(Box<DataType>)
+}
+
+#[derive(PartialEq, Clone)]
+pub enum DynamicType {
+    Struct(HashMap<Atom, DataType>)
 }
 
 #[derive(PartialEq, Clone)]
@@ -48,7 +59,7 @@ pub enum NumTypes {
 
 impl Display for DataType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&match self {
+        f.write_fmt(format_args!("{}", &match self {
             DataType::Num(nt) => format!(
                 "Num{}",
                 if nt.to_string() != "*" {
@@ -61,7 +72,12 @@ impl Display for DataType {
             DataType::Str => "Str".to_string(),
             DataType::Uni => "Uni".to_string(),
             DataType::Null => "<Null>".to_string(),
-        })
+            DataType::Typ { .. } => "Typ".to_string(),
+            DataType::Fnc(g) => format!("Fnc<{}>",
+                                        g.iter().map(|x| x.to_string()).collect::<Vec<String>>().join(",")),
+            DataType::Dynamic { name, .. } => format!("?{}", name),
+            DataType::Array(t) => format!("Arr<{}>", t)
+        }.yellow()))
     }
 }
 
@@ -82,6 +98,7 @@ impl DataType {
         let flt_atom = AtomStorage::atom("Flt".to_string());
         let str_atom = AtomStorage::atom("Str".to_string());
         let bln_atom = AtomStorage::atom("Bln".to_string());
+        let uni_atom = AtomStorage::atom("Uni".to_string());
 
         if atoms[0] == num_atom {
             DataType::Num(if let Some(v) = atoms.get(1) {
@@ -97,6 +114,8 @@ impl DataType {
             DataType::Str
         } else if atoms[0] == bln_atom {
             DataType::Bln
+        } else if atoms[0] == uni_atom {
+            DataType::Uni
         } else {
             DataType::Null
         }
@@ -110,6 +129,7 @@ impl DataType {
         match (self, other) {
             (DataType::Num(NumTypes::Int), DataType::Num(NumTypes::Gen)) => true,
             (DataType::Num(NumTypes::Flt), DataType::Num(NumTypes::Gen)) => true,
+            (DataType::Array(t), DataType::Array(tt)) => t.matches(&tt),
             (_, _) => false,
         }
     }
@@ -133,6 +153,16 @@ impl DataType {
     pub fn is_unit(&self) -> bool {
         matches!(self, DataType::Uni)
     }
+
+    pub fn is_struct(&self) -> bool {
+        matches!(self, DataType::Dynamic { value: DynamicType::Struct(_), .. })
+    }
+
+    pub fn is_fnc(&self) -> bool {
+        matches!(self, DataType::Fnc(_))
+    }
+
+    pub fn is_arr(&self) -> bool { matches!(self, DataType::Array(_)) }
 }
 
 impl TypeSig {
