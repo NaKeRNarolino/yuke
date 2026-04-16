@@ -8,10 +8,12 @@ use crate::util::{Rw, Unbox};
 use lazy_static::lazy_static;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::{Debug, Display, Formatter, Write};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 use colored::Colorize;
 use uuid::Uuid;
 use walrus::Data;
+use crate::static_analysis::StaticAnalysis;
 
 #[derive(Clone)]
 pub struct DataTypeSignature {
@@ -32,7 +34,7 @@ pub struct TypeSig {
     pub generics: Vec<TypeSig>,
 }
 
-#[derive(PartialEq, Clone)]
+#[derive(PartialEq, Clone, Debug)]
 pub enum DataType {
     Num(NumTypes),
     Bln,
@@ -40,17 +42,18 @@ pub enum DataType {
     Uni,
     Null,
     Typ,
+    Any,
     Fnc(Vec<DataType>),
     Dynamic { name: String, value: DynamicType },
-    Array(Box<DataType>)
+    Array(Box<DataType>),
 }
 
-#[derive(PartialEq, Clone)]
+#[derive(PartialEq, Clone, Debug)]
 pub enum DynamicType {
     Struct(HashMap<Atom, DataType>)
 }
 
-#[derive(PartialEq, Clone)]
+#[derive(PartialEq, Clone, Debug)]
 pub enum NumTypes {
     Int,
     Flt,
@@ -76,7 +79,8 @@ impl Display for DataType {
             DataType::Fnc(g) => format!("Fnc<{}>",
                                         g.iter().map(|x| x.to_string()).collect::<Vec<String>>().join(",")),
             DataType::Dynamic { name, .. } => format!("?{}", name),
-            DataType::Array(t) => format!("Arr<{}>", t)
+            DataType::Array(t) => format!("Arr<{}>", t),
+            DataType::Any => "Any".to_string()
         }.yellow()))
     }
 }
@@ -92,13 +96,16 @@ impl Display for NumTypes {
 }
 
 impl DataType {
-    pub fn from_atoms(atoms: Vec<Atom>) -> DataType {
+    pub fn from_atoms(atoms: Vec<Atom>, generics: Vec<ASTNode>, sa: &mut StaticAnalysis) -> DataType {
         let num_atom = AtomStorage::atom("Num".to_string());
         let int_atom = AtomStorage::atom("Int".to_string());
         let flt_atom = AtomStorage::atom("Flt".to_string());
         let str_atom = AtomStorage::atom("Str".to_string());
         let bln_atom = AtomStorage::atom("Bln".to_string());
         let uni_atom = AtomStorage::atom("Uni".to_string());
+        let any_atom = AtomStorage::atom("Any".to_string());
+        let arr_atom = AtomStorage::atom("Arr".to_string());
+        let fnc_atom = AtomStorage::atom("Fnc".to_string());
 
         if atoms[0] == num_atom {
             DataType::Num(if let Some(v) = atoms.get(1) {
@@ -116,6 +123,13 @@ impl DataType {
             DataType::Bln
         } else if atoms[0] == uni_atom {
             DataType::Uni
+        } else if atoms[0] == any_atom {
+            DataType::Any
+        } else if atoms[0] == arr_atom {
+            assert_eq!(generics.len(), 1);
+            let g = sa.type_of(generics[0].clone());
+
+            DataType::Array(Box::new(g))
         } else {
             DataType::Null
         }
@@ -130,6 +144,7 @@ impl DataType {
             (DataType::Num(NumTypes::Int), DataType::Num(NumTypes::Gen)) => true,
             (DataType::Num(NumTypes::Flt), DataType::Num(NumTypes::Gen)) => true,
             (DataType::Array(t), DataType::Array(tt)) => t.matches(&tt),
+            (_, DataType::Any) => true,
             (_, _) => false,
         }
     }
@@ -248,6 +263,21 @@ impl From<Arc<DataTypeSignature>> for FinalizedDataType {
             matches: value.matches_finalized.clone(),
             generics: Vec::new(),
         }
+    }
+}
+
+impl Hash for FinalizedDataType {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+        self.generics.hash(state);
+    }
+}
+
+impl FinalizedDataType {
+    pub fn hashed(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        self.hash(&mut hasher);
+        hasher.finish()
     }
 }
 

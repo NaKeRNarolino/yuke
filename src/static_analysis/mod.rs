@@ -196,8 +196,12 @@ impl StaticAnalysis {
                 }
             }
             ASTNodeValue::Identifier(v) => match self.get_local(&v, node.span, true) {
-                None => DataType::Null,
-                Some(t) => t.r().ty.clone(),
+                None => {
+                    DataType::Null
+                },
+                Some(t) => {
+                    t.r().ty.clone()
+                },
             },
             ASTNodeValue::VariableDeclaration {
                 name,
@@ -320,7 +324,7 @@ impl StaticAnalysis {
                         value: DynamicType::Struct(struct_def)
                     }
                 } else {
-                    DataType::from_atoms(content)
+                    DataType::from_atoms(content, generics, self)
                 }
             },
             ASTNodeValue::If { ifs, or_else } => {
@@ -420,7 +424,7 @@ impl StaticAnalysis {
             ASTNodeValue::Function { arg_names, arg_types, ret_type, body } => {
                 let mut generics: Vec<DataType> = vec![];
 
-                for a_t in arg_types {
+                for a_t in arg_types.clone() {
                     generics.push(
                         self.type_of(a_t)
                     );
@@ -429,6 +433,19 @@ impl StaticAnalysis {
                 generics.push(
                     self.type_of(ret_type.unbox())
                 );
+
+                self.push_scope();
+
+                for (i, a_n) in arg_names.iter().enumerate() {
+                    self.scope().w().locals.insert(
+                        *a_n,
+                        arw(SALocalData {
+                            ty: self.type_of(arg_types[i].clone()),
+                            struct_def: None,
+                            immut: true,
+                        })
+                    );
+                }
 
                 let body_last = self.type_of(body.unbox());
 
@@ -439,6 +456,8 @@ impl StaticAnalysis {
                         format!("Function return type '{}' and what the body returns('{}') don't match.", &generics.last().unwrap(), &body_last)
                     );
                 }
+
+                self.pop_scope();
 
                 DataType::Fnc(generics)
             }
@@ -452,6 +471,7 @@ impl StaticAnalysis {
                         "Not a function.".to_string()
                     );
                 }
+
 
                 let fnc_gen = match fnc_t {
                     DataType::Fnc(g) => g,
@@ -602,6 +622,22 @@ impl StaticAnalysis {
                     );
                     return DataType::Uni
                 }
+            },
+            ASTNodeValue::Method { name, data_type, fn_ast } => {
+                let ty = self.type_of(data_type.unbox());
+                let ty_fn = self.type_of(fn_ast.unbox());
+                // todo! register method
+
+                self.scope().w().locals.insert(
+                    name,
+                    arw(SALocalData {
+                        ty: ty_fn,
+                        struct_def: None,
+                        immut: true,
+                    })
+                );
+
+                DataType::Uni
             }
         };
         self.node_types.insert(node.id, t.clone());

@@ -1,0 +1,13 @@
+immut Pair = struct { x: Num.Int, y: Num.Int };
+
+fn @?Pair : self pairSum() -> Num.Int {
+    self.x + self.y
+}
+
+fn @?Pair : self pairDoubled() -> ?Pair {
+    Pair.{ x: self.x * 2, y: self.y * 2 }
+}
+
+let p = Pair.{ x: 10, y: 15 };
+
+p.pairDoubled().pairSum()

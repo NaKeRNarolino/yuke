@@ -102,6 +102,11 @@ pub enum ASTNodeValue {
         index: Box<ASTNode>,
     },
     Unit,
+    Method {
+        name: Atom,
+        data_type: Box<ASTNode>,
+        fn_ast: Box<ASTNode>
+    }
 }
 
 #[derive(Clone, Debug)]

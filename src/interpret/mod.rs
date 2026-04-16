@@ -31,6 +31,7 @@ pub struct RuntimeScope {
     variables: Rw<HashMap<Atom, Arw<Variable>>>,
     types: Rw<HashMap<Atom, Arc<DataTypeSignature>>>,
     interpreter: Arc<Interpreter>,
+    methods: Rw<HashMap<u64, HashMap<Atom, RuntimeValue>>>
 }
 
 impl RuntimeScope {
@@ -40,6 +41,7 @@ impl RuntimeScope {
             variables: Rw::new(HashMap::new()),
             types: Rw::new(HashMap::new()),
             interpreter: interpreter.clone(),
+            methods: Rw::new(HashMap::new()),
         }
     }
 
@@ -356,6 +358,7 @@ impl Interpreter {
             ASTNodeValue::PropertyAccess { .. } => self.eval_struct_property(node, scope),
             ASTNodeValue::ArrayDeclaration { .. } => self.eval_array_decl(node, scope),
             ASTNodeValue::ArrayAccess { .. } => self.eval_array_access(node, scope),
+            ASTNodeValue::Method { .. } => self.eval_method(node, scope),
         }
     }
 
@@ -571,12 +574,12 @@ impl Interpreter {
                         let t2 = &fd.arg_types[i];
                         Log::err(
                             format!(
-                                "The type of the provided argument [{}] {} does not match the expected type {} {}.",
+                                "The type of the provided argument [{}] {} does not match the expected type {}{}.",
                                 i,
                                 t1.vis(),
                                 t2.vis(),
                                 if t1.vis() == t2.vis() {
-                                    format!("(UUIDs {} and {} respectfully)", t1.uuid, t2.uuid)
+                                    format!(" (UUIDs {} and {} respectfully)", t1.uuid, t2.uuid)
                                 } else {
                                     "".to_string()
                                 }
@@ -639,6 +642,11 @@ impl Interpreter {
                 scope.r().find_type(ty.into(), tg, dy, Some(x.span), None)
             })
             .collect()
+    }
+
+    fn create_type(x: ASTNode, scope: Arw<RuntimeScope>) -> FinalizedDataType {
+        let (dy, ty, tg) = x.value.clone().into_type().unwrap();
+        scope.r().find_type(ty.into(), tg, dy, Some(x.span), None)
     }
 
     fn eval_struct_creation(&self, node: ASTNode, scope: Arw<RuntimeScope>) -> RuntimeValue {
@@ -795,5 +803,35 @@ impl Interpreter {
 
     pub fn scope_ref(&self) -> Arc<Interpreter> {
         Arc::new(self.clone())
+    }
+
+    fn eval_method(&self, node: ASTNode, scope: Arw<RuntimeScope>) -> RuntimeValue {
+        let (name, data_type, fn_box) = node.value.as_method().unwrap();
+
+        let data_type = Self::create_type(data_type.clone().unbox(), scope.clone());
+
+        let func = self.eval_function(fn_box.clone().unbox(), scope.clone());
+        let f_c = func.clone();
+
+        scope.w().declare_variable(
+            *name,
+            func,
+            true,
+            Some(node.span),
+            None
+        );
+
+        let hash = data_type.hashed();
+
+        let scope_w = scope.w();
+        let mut methods = scope_w.methods.w();
+
+        if !methods.contains_key(&hash) {
+            methods.insert(hash, HashMap::new());
+        }
+
+        methods.get_mut(&hash).unwrap().insert(*name, f_c);
+
+        RuntimeValue::Unit
     }
 }

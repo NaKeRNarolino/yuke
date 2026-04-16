@@ -85,16 +85,23 @@ mod interpret_types {
                 kind BuiltIn
             }
         };
-
+        let any = type_signature! {
+            Any {
+                match |_, _| { true },
+                kind BuiltIn
+            }
+        };
         let arr = type_signature! {
             Arr {
                 match |t, v| { matches!(v, RuntimeValue::Array(_) )},
                 kind BuiltIn,
                 finalized |t, v| {
-                    matches!(v, RuntimeValue::Array(arr) if arr.ty == t.generics[0])
+                    matches!(v, RuntimeValue::Array(arr) if arr.ty == t.generics[0] || t.generics[0].name == "Any")
+                    // todo! WORKAROUND, NEEDS TO BE REFACTORED TO HANDLE TYPE CASTS   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
                 }
             }
         };
+
 
         types.add_type(unit);
         types.add_type(numerics);
@@ -103,6 +110,7 @@ mod interpret_types {
         types.add_type(fnc);
         types.add_type(typ);
         types.add_type(arr);
+        types.add_type(any);
     }
 }
 
@@ -113,7 +121,7 @@ fn main() {
 
     let tk = tokenize("main.yk".to_string(), file.to_string());
 
-    dbg!(&tk);
+    // dbg!(&tk);
 
     // let numerics = yuke_type! {
     //     Num {
@@ -152,11 +160,11 @@ fn main() {
 
     let ast = Parser { tokens: tk }.ast();
 
+    dbg!(&ast);
+
     let mut analysis = StaticAnalysis::new();
 
     analysis.analyze(ast.value.clone().into_block().unwrap());
-
-    dbg!(&ast);
 
     let global_types = Types::new();
 

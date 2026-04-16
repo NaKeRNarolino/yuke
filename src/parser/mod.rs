@@ -98,7 +98,7 @@ impl Parser {
 
     fn parse_assignment(&mut self) -> ASTNode {
         let x = self.parse_add_expr();
-        let mut left = self.try_parse_struct_property(x);
+        let mut left = self.try_parse_struct_property_or_method(x);
         let start = left.span;
 
         while self.curr().value.is_any_assignment_operator() {
@@ -637,6 +637,12 @@ impl Parser {
         let f = self.go(); // `fn`
         //
 
+        if matches!(self.curr().value, TokenValue::Sign(SignType::At)) {
+            self.go();
+
+            return self.parse_method(f);
+        }
+
         let mut named: Option<Atom> = None;
 
         if matches!(self.curr().value, TokenValue::Identifier(_)) {
@@ -936,7 +942,7 @@ impl Parser {
         }
     }
 
-    fn try_parse_struct_property(&mut self, on: ASTNode) -> ASTNode {
+    fn try_parse_struct_property_or_method(&mut self, on: ASTNode) -> ASTNode {
         if self.curr().value == TokenValue::Sign(SignType::Dot)
             && matches!(self.peek().value, TokenValue::Identifier(_))
         {
@@ -945,6 +951,72 @@ impl Parser {
             let name = name_tk.value.into_identifier().unwrap();
 
             let o_span = on.span;
+
+            if matches!(self.curr().value, TokenValue::Sign(SignType::Paren(Direction::Open))) {
+                self.go(); // `(`
+
+                let mut args = Vec::new();
+
+                args.push(on.clone());
+
+                if self.curr().value == TokenValue::Sign(SignType::Paren(Direction::Close)) {
+                    let l = self.go();
+
+                    let mut sp = on.span;
+                    sp.end = l.span.end;
+                    return ASTNode::new(
+                        sp,
+                        ASTNodeValue::Call {
+                            args,
+                            on: Box::new(
+                                ASTNode::new(
+                                    name_tk.span,
+                                    ASTNodeValue::Identifier(
+                                        name
+                                    )
+                                )
+                            ),
+                        },
+                    );
+                }
+
+                args.push(self.parse());
+
+                while self.not_end()
+                    && self.curr().value == TokenValue::Sign(SignType::Comma)
+                    && self.curr().value != TokenValue::Sign(SignType::Paren(Direction::Close))
+                {
+                    self.go(); // `,`
+
+                    args.push(self.parse());
+                }
+
+                let l = self
+                    .expected(
+                        |v| matches!(v, TokenValue::Sign(SignType::Paren(Direction::Close))),
+                        "Expected an ')', found %s.",
+                    )
+                    .unwrap();
+
+                let mut sp = on.span;
+                sp.end = l.span.end;
+
+                return ASTNode::new(
+                    sp,
+                    ASTNodeValue::Call {
+                        args,
+                        on: Box::new(
+                            ASTNode::new(
+                                name_tk.span,
+                                ASTNodeValue::Identifier(
+                                    name
+                                )
+                            )
+                        ),
+                    },
+                )
+            }
+
             ASTNode::new(
                 Span::between(o_span, name_tk.span),
                 ASTNodeValue::PropertyAccess {
@@ -1022,7 +1094,7 @@ impl Parser {
                     ) {
                         node = self.try_parse_struct_creation(node);
                     } else {
-                        node = self.try_parse_struct_property(node);
+                        node = self.try_parse_struct_property_or_method(node);
                     }
                 }
                 // a()
@@ -1055,6 +1127,110 @@ impl Parser {
                 on: Box::new(node),
                 index: Box::new(idx),
             },
+        )
+    }
+
+    fn parse_method(&mut self, fn_token: Token /* for span */) -> ASTNode {
+        let data_type = self.parse_data_type();
+
+        self.expected(|v| matches!(v, TokenValue::Sign(SignType::Colon)), "Expected a ':', found %s.").unwrap();
+
+        let ident = self.expected(|v| v.is_identifier(), "Expected an Identifier, found %s.").unwrap();
+
+        let arg_name = ident.value.as_identifier().unwrap();
+
+        let fn_name_tk = self.expected(|v| v.is_identifier(), "Expected an Identifier, found %s.").unwrap();
+
+        let fn_name = fn_name_tk.value.as_identifier().unwrap();
+
+        self.expected(
+            |v| matches!(v, TokenValue::Sign(SignType::Paren(Direction::Open))),
+            "Expected an '(', found %s.",
+        )
+            .unwrap();
+
+        let mut args_name: Vec<Atom> = Vec::new();
+
+        args_name.push(*arg_name);
+
+        let mut args_type: Vec<ASTNode> = Vec::new();
+
+        args_type.push(data_type.clone());
+
+        if self.curr().value != TokenValue::Sign(SignType::Paren(Direction::Close)) {
+            let ident_tk = self
+                .expected(
+                    |v| matches!(v, TokenValue::Identifier(_)),
+                    "Expected an Identifier, found %s.",
+                )
+                .unwrap();
+            self.expected(
+                |v| matches!(v, TokenValue::Sign(SignType::Colon)),
+                "Expected a ':', found %s.",
+            )
+                .unwrap();
+            let ty = self.parse_data_type();
+
+            args_name.push(ident_tk.value.into_identifier().unwrap());
+            args_type.push(ty);
+
+            while self.not_end()
+                && self.curr().value == TokenValue::Sign(SignType::Comma)
+                && self.curr().value != TokenValue::Sign(SignType::Paren(Direction::Close))
+            {
+                self.go();
+
+                let ident_tk = self
+                    .expected(
+                        |v| matches!(v, TokenValue::Identifier(_)),
+                        "Expected an Identifier, found %s.",
+                    )
+                    .unwrap();
+                self.expected(
+                    |v| matches!(v, TokenValue::Sign(SignType::Colon)),
+                    "Expected a ':', found %s.",
+                )
+                    .unwrap();
+                let ty = self.parse_data_type();
+
+                args_name.push(ident_tk.value.into_identifier().unwrap());
+                args_type.push(ty);
+            }
+        }
+
+        self.expected(
+            |v| matches!(v, TokenValue::Sign(SignType::Paren(Direction::Close))),
+            "Expected an ')', found %s.",
+        )
+            .unwrap();
+
+        self.expected(
+            |v| matches!(v, TokenValue::Sign(SignType::Arrow)),
+            "Expected an '->', found %s.",
+        )
+            .unwrap();
+
+        let ret = self.parse_data_type();
+
+        let body = self.parse_code_block();
+
+        ASTNode::new(
+            Span::between(fn_token.span, (&body).span),
+            ASTNodeValue::Method {
+                name: *fn_name,
+                data_type: Box::new(data_type),
+                fn_ast: Box::new(
+                    ASTNode::new(
+                        Span::between(fn_token.span, (&body).span),
+                        ASTNodeValue::Function {
+                            ret_type: Box::new(ret),
+                            arg_names: args_name,
+                            arg_types: args_type,
+                            body: Box::new(body)
+                        }
+                    )
+                )
+            }
         )
     }
 }
