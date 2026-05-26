@@ -1,0 +1,27 @@
+struct Pair {
+    x: Int,
+    y: Int
+}
+
+fn Pair.sum() -> Int {
+    self.x + self.y
+}
+
+fn Pair::unit() -> Pair {
+    Pair { x = 1, y = 1 }
+}
+
+iota Values {
+    A,
+    B,
+    C
+}
+
+fn hi() -> Str {
+    "Hi"
+}
+
+let x = 10;
+let y = Pair { x = 10, y = 250 };
+y.x += x;
+

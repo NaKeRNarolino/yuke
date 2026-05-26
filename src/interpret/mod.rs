@@ -1,24 +1,22 @@
-use crate::interpret::structs::{
-    ArrayData, BinExpLogicals, BinExpRelations, ComplexData, ComplexStruct, FunctionData,
-    StructData, TypeData,
-};
+use crate::interpret::structs::{ArrayData, BinExpLogicals, BinExpRelations, ComplexData, ComplexStruct, FunctionData, RuntimeValue, StructData, TypeData};
 pub mod structs;
 
 use crate::interpret::structs::{
-    AssignmentProperty, BinExpAdd, BinExpDiv, BinExpMul, BinExpRem, BinExpSub, RuntimeValue,
+    AssignmentProperty, BinExpAdd, BinExpDiv, BinExpMul, BinExpRem, BinExpSub, RuntimeValueType,
     Variable,
 };
 use crate::lexer::structs::{OperatorType, Span};
 use crate::log::{Control, Log, LogOrigin};
 use crate::parser::structs::{ASTNode, ASTNodeValue};
 use crate::store::{Atom, AtomStorage};
-use crate::typed::{CallMatches, DataTypeSignature, FinalizedDataType, Types, try_match};
+use crate::typed::{CallMatches, TypeSignature, BuiltType, Types, try_match, DataTypeKind, UnderlyingType, TypeStructure};
 use crate::util::{Arw, Rw, Unbox, arw};
 use std::collections::{HashMap, VecDeque};
 use std::fmt::format;
 use std::ops::Deref;
-use std::sync::Arc;
+use std::sync::{Arc, RwLockReadGuard};
 use uuid::Uuid;
+use proc_macro::type_signature;
 
 #[derive(Debug, Clone)]
 pub struct Interpreter {
@@ -29,9 +27,9 @@ pub struct Interpreter {
 pub struct RuntimeScope {
     parent: Option<Arw<RuntimeScope>>,
     variables: Rw<HashMap<Atom, Arw<Variable>>>,
-    types: Rw<HashMap<Atom, Arc<DataTypeSignature>>>,
+    types: Arw<Types>,
     interpreter: Arc<Interpreter>,
-    methods: Rw<HashMap<u64, HashMap<Atom, RuntimeValue>>>
+    methods: Rw<HashMap<u64, HashMap<Atom, RuntimeValueType>>>
 }
 
 impl RuntimeScope {
@@ -39,7 +37,7 @@ impl RuntimeScope {
         RuntimeScope {
             parent,
             variables: Rw::new(HashMap::new()),
-            types: Rw::new(HashMap::new()),
+            types: Arc::new(Rw::new(Types::new())),
             interpreter: interpreter.clone(),
             methods: Rw::new(HashMap::new()),
         }
@@ -90,7 +88,7 @@ impl RuntimeScope {
         value: RuntimeValue,
         is_immut: bool,
         trace: Option<Span>,
-        ty: Option<FinalizedDataType>,
+        ty: Option<BuiltType>,
     ) {
         if let Some(_) = self.get_variable_condition(name) {
             Log::err(
@@ -107,12 +105,12 @@ impl RuntimeScope {
         }
 
         if let Some(t) = ty.clone() {
-            if !(t.matches)(t.clone(), &value) {
+            if !(t.matches)(t.clone(), &value.val) {
                 Log::err(
                     format!(
                         "Variable '{}' cannot be declared, as the provided value of type '{}' doesn't match the provided type of '{}'.",
                         AtomStorage::string(name).unwrap(),
-                        self.try_match(&value).unwrap().vis(),
+                        self.try_match(&value.val).unwrap().vis(),
                         &t.vis()
                     ),
                     LogOrigin::Interpret,
@@ -124,10 +122,7 @@ impl RuntimeScope {
             }
         }
 
-        let ty = match ty {
-            None => self.try_match(&value).unwrap(),
-            Some(v) => v,
-        };
+        let ty = value.type_ref.clone();
 
         self.variables.w().insert(
             name,
@@ -157,12 +152,12 @@ impl RuntimeScope {
                     Control::exit();
                 }
 
-                if !v.r().ty.call_matches(&value) {
+                if !v.r().ty.call_matches(&value.val) {
                     Log::err(
                         format!(
                             "Cannot assign a new value to the variable '{}' as the value of type '{}' doesn't match variable's type of '{}'.",
                             AtomStorage::string(v_name).unwrap(),
-                            self.try_match(&value).unwrap().visual_name,
+                            self.try_match(&value.val).unwrap().type_ref.name,
                             &v.r().ty.vis()
                         ),
                         LogOrigin::Interpret,
@@ -176,18 +171,18 @@ impl RuntimeScope {
         }
     }
 
-    pub fn try_match_complex(&self, value: &ComplexData) -> Option<FinalizedDataType> {
+    pub fn try_match_complex(&self, value: &ComplexData) -> Option<BuiltType> {
         match value {
-            ComplexData::Struct(v) => Some(self.find_dynamic_type(v.name, None)),
+            ComplexData::Struct(v) => Some(self.find_type(v.name, vec![], None, None)),
         }
     }
 
-    pub fn try_match(&self, value: &RuntimeValue) -> Option<FinalizedDataType> {
-        if let RuntimeValue::Complex(c) = value {
+    pub fn try_match(&self, value: &RuntimeValueType) -> Option<BuiltType> {
+        if let RuntimeValueType::Complex(c) = value {
             return self.try_match_complex(c);
         }
 
-        if let Some(sig) = try_match(&self.types.r(), value) {
+        if let Some(sig) = try_match(&self.types.r().types.r(), value) {
             return Some(sig);
         }
 
@@ -200,57 +195,49 @@ impl RuntimeScope {
         try_match(&self.interpreter.global_types.types.r(), value)
     }
 
-    fn add_type(&mut self, types: (Atom, Arc<DataTypeSignature>)) {
-        self.types.w().insert(types.0, types.1);
+    fn add_type(&mut self, types: (Atom, Arc<TypeSignature>)) {
+        self.types.w().add_type(types);
     }
 
-    pub fn find_dynamic_type(&self, type_name: Atom, trace: Option<Span>) -> FinalizedDataType {
-        let variable = self.get_variable(type_name, trace);
-
-        let v_r = variable.r();
-        let v = v_r.value.r();
-
-        let val = v.as_type().unwrap().clone();
-
-        let uuid: Uuid;
-
-        let matches: Arc<dyn Fn(FinalizedDataType, &RuntimeValue) -> bool> = Arc::new(match val {
-            TypeData::Struct(stct) => {
-                uuid = stct.uuid;
-                move |t, v| {
-                    if let RuntimeValue::Complex(ComplexData::Struct(str)) = v {
-                        str.prop_types == stct.prop_types && str.prop_names == stct.prop_names
-                    } else {
-                        false
-                    }
-                }
-            }
-        });
-
-        FinalizedDataType {
-            name: AtomStorage::string(type_name).unwrap().clone(),
-            visual_name: format!("?{}", AtomStorage::string(type_name).unwrap().clone()),
-            generics: Vec::new(),
-            matches,
-            uuid,
-        }
-    }
+    // pub fn find_dynamic_type(&self, type_name: Atom, trace: Option<Span>) -> BuiltType {
+    //     let variable = self.get_variable(type_name, trace);
+    //
+    //     let v_r = variable.r();
+    //     let v = v_r.value.r();
+    //
+    //     let val = v.as_type().unwrap().clone();
+    //
+    //     let uuid: Uuid;
+    //
+    //     let matches: Arc<dyn Fn(BuiltType, &RuntimeValue) -> bool> = Arc::new(match val {
+    //         TypeData::Struct(stct) => {
+    //             uuid = stct.uuid;
+    //             move |t, v| {
+    //                 if let RuntimeValue::Complex(ComplexData::Struct(str)) = v {
+    //                     str.prop_types == stct.prop_types && str.prop_names == stct.prop_names
+    //                 } else {
+    //                     false
+    //                 }
+    //             }
+    //         }
+    //     });
+    //
+    //     BuiltType {
+    //         type_ref
+    //         generics: Vec::new(),
+    //         matches,
+    //         uuid,
+    //     }
+    // }
 
     pub(crate) fn find_type(
         &self,
-        mut target_type: VecDeque<Atom>,
+        mut target_type: Atom,
         generics: Vec<ASTNode>,
-        dynamic: bool,
         trace: Option<Span>,
         name: Option<String>,
-    ) -> FinalizedDataType {
-        let initial = *target_type.front().unwrap();
-
-        if dynamic {
-            return self.find_dynamic_type(initial, trace);
-        }
-
-        if self.interpreter.global_types.has_type(initial) {
+    ) -> BuiltType {
+        if self.interpreter.global_types.has_type(target_type.clone()) {
             return self
                 .interpreter
                 .global_types
@@ -260,51 +247,15 @@ impl RuntimeScope {
         let name = if let Some(n) = name {
             n
         } else {
-            Vec::from(target_type.clone())
-                .iter()
-                .map(|x| AtomStorage::string(*x).unwrap().as_str())
-                .collect::<Vec<&str>>()
-                .join(".")
+            target_type.to_string()
         };
 
-        if self.types.r().contains_key(&initial) {
-            target_type.pop_front();
-            let tp = self.types.r();
-            let mut kv = tp.get(&initial).unwrap();
-
-            while !target_type.is_empty() {
-                let next = target_type.pop_front().unwrap();
-                kv = match kv.children.get(&next) {
-                    None => {
-                        Log::err(
-                            format!("Type '{}' couldn't be found.", &name),
-                            LogOrigin::Interpret,
-                        );
-                        if let Some(tr) = trace {
-                            Log::trace_span(tr);
-                        }
-                        Control::exit();
-                    }
-                    Some(v) => v,
-                }
-            }
-
-            let t = kv.clone();
-
-            FinalizedDataType::from(t).apply(
-                generics
-                    .iter()
-                    .map(|x| {
-                        let (dy, tp, tg) = x.value.clone().into_type().unwrap();
-
-                        self.find_type(tp.into(), tg, dy, Some(x.span), None)
-                    })
-                    .collect(),
-            )
+        if self.types.r().types.r().contains_key(&target_type) {
+            self.types.r().find_type(target_type, generics, trace, &self)
         } else {
             if let Some(par) = &self.parent {
                 par.r()
-                    .find_type(target_type, generics, dynamic, trace, Some(name))
+                    .find_type(target_type, generics, trace, Some(name))
             } else {
                 Log::err(
                     format!("Type '{}' couldn't be found.", &name),
@@ -317,11 +268,25 @@ impl RuntimeScope {
             }
         }
     }
+
+    pub fn unit_type(&self) -> RuntimeValue {
+        RuntimeValue::new(
+            self.find_type(AtomStorage::atom("Uni"), vec![], None, None),
+            RuntimeValueType::Unit
+        )
+    }
+
+    pub fn auto_type(&self, rvt: RuntimeValueType) -> RuntimeValue {
+        RuntimeValue::new(
+            self.try_match(&rvt).unwrap(),
+            rvt
+        )
+    }
 }
 
 impl Interpreter {
     fn eval_block(&self, ast: Vec<ASTNode>, scope: Arw<RuntimeScope>) -> RuntimeValue {
-        let mut res = RuntimeValue::Unit;
+        let mut res = scope.r().unit_type();
 
         for node in ast {
             res = self.eval_node(node, scope.clone());
@@ -333,15 +298,15 @@ impl Interpreter {
     pub fn eval_node(&self, node: ASTNode, scope: Arw<RuntimeScope>) -> RuntimeValue {
         match node.value {
             ASTNodeValue::BinaryExpression { .. } => self.eval_binary_expr(node, scope),
-            ASTNodeValue::Number(v) => RuntimeValue::Number(v),
-            ASTNodeValue::Unit => RuntimeValue::Unit,
+            ASTNodeValue::Number(v) => scope.r().auto_type(RuntimeValueType::Number(v)),
+            ASTNodeValue::Unit => scope.r().unit_type(),
             ASTNodeValue::VariableDeclaration { .. } => self.eval_variable_declaration(node, scope),
             ASTNodeValue::Identifier(_) => self.eval_identifier(node, scope),
             ASTNodeValue::Assignment { .. } => self.eval_assignment(node, scope),
             ASTNodeValue::String(v) => {
-                RuntimeValue::String(AtomStorage::string(v).unwrap().clone())
+                scope.r().auto_type(RuntimeValueType::String(AtomStorage::string(v).unwrap().clone()))
             }
-            ASTNodeValue::Boolean(v) => RuntimeValue::Boolean(v),
+            ASTNodeValue::Boolean(v) => scope.r().auto_type(RuntimeValueType::Boolean(v)),
             ASTNodeValue::Block { contents } => self.eval_block(
                 contents,
                 arw(RuntimeScope::parented(scope, Arc::new(self.clone()))),
@@ -370,8 +335,8 @@ impl Interpreter {
         let ty_res = match ty {
             None => None,
             Some(v) => {
-                let (dy, tn, tg) = v.value.into_type().unwrap();
-                Some(scope.r().find_type(tn.into(), tg, dy, Some(v.span), None))
+                let (tn, tg) = v.value.into_type().unwrap();
+                Some(scope.r().find_type(tn.into(), tg, Some(v.span), None))
             }
         };
 
@@ -379,31 +344,35 @@ impl Interpreter {
             .w()
             .declare_variable(name, ev, is_immut, Some(node.span), ty_res);
 
-        RuntimeValue::Unit
+        scope.r().unit_type()
     }
 
     fn eval_binary_expr(&self, node: ASTNode, scope: Arw<RuntimeScope>) -> RuntimeValue {
         let (left, right, op) = node.value.into_binary_expression().unwrap();
 
         let ev_l = self.eval_node((*left).clone(), scope.clone());
-        let ev_r = self.eval_node((*right).clone(), scope);
+        let ev_r = self.eval_node((*right).clone(), scope.clone());
 
-        match op {
-            OperatorType::Plus => ev_l.add(ev_r, node.span),
-            OperatorType::Minus => ev_l.sub(ev_r, node.span),
-            OperatorType::Multiply => ev_l.mul(ev_r, node.span),
-            OperatorType::Divide => ev_l.div(ev_r, node.span),
-            OperatorType::Modulo => ev_l.rem(ev_r, node.span),
-            OperatorType::Equality => ev_l.eq(ev_r, node.span),
-            OperatorType::Inequality => ev_l.ieq(ev_r, node.span),
-            OperatorType::BiggerEqual => ev_l.beq(ev_r, node.span),
-            OperatorType::SmallerEqual => ev_l.seq(ev_r, node.span),
-            OperatorType::Bigger => ev_l.big(ev_r, node.span),
-            OperatorType::Smaller => ev_l.sml(ev_r, node.span),
-            OperatorType::LogicalAnd => ev_l.l_and(ev_r, node.span),
-            OperatorType::LogicalOr => ev_l.l_or(ev_r, node.span),
-            _ => unreachable!(),
-        }
+        let rvt = match op {
+            OperatorType::Plus => ev_l.val.add(ev_r.val, node.span),
+            OperatorType::Minus => ev_l.val.sub(ev_r.val, node.span),
+            OperatorType::Multiply => ev_l.val.mul(ev_r.val, node.span),
+            OperatorType::Divide => ev_l.val.div(ev_r.val, node.span),
+            OperatorType::Modulo => ev_l.val.rem(ev_r.val, node.span),
+            OperatorType::Equality => ev_l.val.eq(ev_r.val, node.span),
+            OperatorType::Inequality => ev_l.val.ieq(ev_r.val, node.span),
+            OperatorType::BiggerEqual => ev_l.val.beq(ev_r.val, node.span),
+            OperatorType::SmallerEqual => ev_l.val.seq(ev_r.val, node.span),
+            OperatorType::Bigger => ev_l.val.big(ev_r.val, node.span),
+            OperatorType::Smaller => ev_l.val.sml(ev_r.val, node.span),
+            OperatorType::LogicalAnd => ev_l.val.l_and(ev_r.val, node.span),
+            OperatorType::LogicalOr => ev_l.val.l_or(ev_r.val, node.span),
+            _ => unreachable!()
+        };
+
+        let mt = scope.r().try_match(&rvt).unwrap();
+
+        RuntimeValue::new(mt, rvt)
     }
 
     fn eval_identifier(&self, node: ASTNode, scope: Arw<RuntimeScope>) -> RuntimeValue {
@@ -438,11 +407,11 @@ impl Interpreter {
 
         scope.w().eval_assignment(prop, ev_val, trace);
 
-        RuntimeValue::Unit
+        scope.r().unit_type()
     }
 
     fn eval_if(&self, node: ASTNode, scope: Arw<RuntimeScope>) -> RuntimeValue {
-        let mut ret = RuntimeValue::Unit;
+        let mut ret = scope.r().unit_type();
 
         let (ifs, or_else) = node.value.into_if().unwrap();
 
@@ -451,7 +420,7 @@ impl Interpreter {
         for stmt in ifs {
             let ev_condition = self.eval_node(stmt.condition.unbox(), scope.clone());
 
-            if matches!(ev_condition, RuntimeValue::Boolean(true)) {
+            if matches!(ev_condition.val, RuntimeValueType::Boolean(true)) {
                 should_run_else = false;
                 ret = self.eval_node(stmt.block.unbox(), scope.clone());
                 break;
@@ -472,7 +441,7 @@ impl Interpreter {
 
         // let ev_v = self.eval_node(value.unbox(), scope.clone());
 
-        let mut ret = RuntimeValue::Unit;
+        let mut ret = scope.r().unit_type();
 
         let mut should_run_else = true;
 
@@ -481,8 +450,8 @@ impl Interpreter {
             let ev_condition = self.eval_node(stmt.condition.unbox(), scope.clone());
 
             if matches!(
-                ev_condition,
-                RuntimeValue::Boolean(true)
+                ev_condition.val,
+                RuntimeValueType::Boolean(true)
             ) {
                 should_run_else = false;
                 ret = self.eval_node(stmt.block.unbox(), scope.clone());
@@ -499,39 +468,43 @@ impl Interpreter {
         ret
     }
 
-    fn find_ty(&self, node: ASTNode, scope: Arw<RuntimeScope>) -> FinalizedDataType {
-        let (dy, ty, tg) = node.value.into_type().unwrap();
+    fn find_ty(&self, node: ASTNode, scope: Arw<RuntimeScope>) -> BuiltType {
+        let (ty, tg) = node.value.into_type().unwrap();
         scope
             .r()
-            .find_type(ty.into(), tg, dy, Some(node.span), None)
+            .find_type(ty.into(), tg, Some(node.span), None)
     }
 
     fn eval_function(&self, node: ASTNode, scope: Arw<RuntimeScope>) -> RuntimeValue {
         let (arg_names, arg_types, ret_type, body) = node.value.into_function().unwrap();
 
-        let types: Vec<FinalizedDataType> = arg_types
+        let types: Vec<BuiltType> = arg_types
             .iter()
             .map(|x| {
-                let (dy, ty, tg) = x.value.clone().into_type().unwrap();
-                scope.r().find_type(ty.into(), tg, dy, Some(x.span), None)
+                let (ty, tg) = x.value.clone().into_type().unwrap();
+                scope.r().find_type(ty.into(), tg, Some(x.span), None)
             })
             .collect();
         let ret_type = {
-            let (dy, ty, tg) = ret_type.value.into_type().unwrap();
+            let (ty, tg) = ret_type.value.into_type().unwrap();
             scope
                 .r()
-                .find_type(ty.into(), tg, dy, Some(ret_type.span), None)
+                .find_type(ty.into(), tg, Some(ret_type.span), None)
         };
 
         let func_scope = RuntimeScope::parented(scope.clone(), Arc::new(self.clone()));
 
-        RuntimeValue::Function(FunctionData {
+        let rvt = RuntimeValueType::Function(FunctionData {
             arg_names,
             arg_types: types,
             ret_type,
             function_body: body,
             scope: arw(func_scope),
-        })
+        });
+
+        let mt = scope.r().try_match(&rvt);
+
+        RuntimeValue::new(mt.unwrap(), rvt)
     }
 
     fn eval_call(&self, node: ASTNode, scope: Arw<RuntimeScope>) -> RuntimeValue {
@@ -540,8 +513,8 @@ impl Interpreter {
         let o_span = on.span;
         let fun = self.eval_node(on.unbox(), scope.clone());
 
-        match fun {
-            RuntimeValue::Function(fd) => {
+        match fun.val {
+            RuntimeValueType::Function(fd) => {
                 let fn_scope = arw(RuntimeScope::parented(
                     fd.scope.clone(),
                     Arc::new(self.clone()),
@@ -569,20 +542,15 @@ impl Interpreter {
                     let ty = &fd.arg_types[i];
                     let nm = &fd.arg_names[i];
 
-                    if !ty.call_matches(&args_ev[i]) {
-                        let t1 = scope.r().try_match(&args_ev[i]).unwrap();
+                    if !ty.call_matches(&args_ev[i].val) {
+                        let t1 = scope.r().try_match(&args_ev[i].val).unwrap();
                         let t2 = &fd.arg_types[i];
                         Log::err(
                             format!(
-                                "The type of the provided argument [{}] {} does not match the expected type {}{}.",
+                                "The type of the provided argument [{}] {} does not match the expected type {}.",
                                 i,
                                 t1.vis(),
-                                t2.vis(),
-                                if t1.vis() == t2.vis() {
-                                    format!(" (UUIDs {} and {} respectfully)", t1.uuid, t2.uuid)
-                                } else {
-                                    "".to_string()
-                                }
+                                t2.vis()
                             ),
                             LogOrigin::Interpret,
                         );
@@ -601,11 +569,11 @@ impl Interpreter {
 
                 let e = self.eval_node(fd.function_body.unbox(), fn_scope);
 
-                if !fd.ret_type.call_matches(&e) {
+                if !fd.ret_type.call_matches(&e.val) {
                     Log::err(
                         format!(
                             "The returned value of type {} does not match the expected type {}.",
-                            scope.r().try_match(&e).unwrap().visual_name,
+                            scope.r().try_match(&e.val).unwrap().type_ref.name,
                             fd.ret_type.vis()
                         ),
                         LogOrigin::Interpret,
@@ -625,97 +593,128 @@ impl Interpreter {
     }
 
     fn eval_struct_def(&self, node: ASTNode, scope: Arw<RuntimeScope>) -> RuntimeValue {
-        let (names, types) = node.value.into_struct_definition().unwrap();
+        let (name, names, types) = node.value.into_struct_definition().unwrap();
 
-        RuntimeValue::Type(TypeData::Struct(StructData {
-            prop_names: names,
-            prop_types: self.map_types(types, scope),
-            uuid: Uuid::new_v4(),
-        }))
+        let mut keys = HashMap::new();
+
+        for i in 0..names.len() {
+            keys.insert(names[i], self.find_ty(types[i].clone(), scope.clone()));
+        }
+
+        scope.r().types.w().add_type(
+            (name, Arc::new(TypeSignature {
+                name,
+                kind: DataTypeKind::User,
+                underlying: Arc::new(Rw::new(UnderlyingType::new(
+                    TypeStructure::Struct {
+                        keys
+                    }
+                ))),
+                matches: Arc::new(|dt, v| true),
+                matches_built: Arc::new(|dt, v| true)
+            }))
+        );
+
+        // RuntimeValue::Type(TypeData::Struct(StructData {
+        //     prop_names: names,
+        //     prop_types: self.map_types(types, scope),
+        //     uuid: Uuid::new_v4(),
+        // }))
+
+        scope.r().unit_type()
     }
 
-    fn map_types(&self, types: Vec<ASTNode>, scope: Arw<RuntimeScope>) -> Vec<FinalizedDataType> {
+    fn map_types(&self, types: Vec<ASTNode>, scope: Arw<RuntimeScope>) -> Vec<BuiltType> {
         types
             .iter()
             .map(|x| {
-                let (dy, ty, tg) = x.value.clone().into_type().unwrap();
-                scope.r().find_type(ty.into(), tg, dy, Some(x.span), None)
+                let (ty, tg) = x.value.clone().into_type().unwrap();
+                scope.r().find_type(ty.into(), tg, Some(x.span), None)
             })
             .collect()
     }
 
-    fn create_type(x: ASTNode, scope: Arw<RuntimeScope>) -> FinalizedDataType {
-        let (dy, ty, tg) = x.value.clone().into_type().unwrap();
-        scope.r().find_type(ty.into(), tg, dy, Some(x.span), None)
+    fn create_type(x: ASTNode, scope: Arw<RuntimeScope>) -> BuiltType {
+        let (ty, tg) = x.value.clone().into_type().unwrap();
+        scope.r().find_type(ty.into(), tg, Some(x.span), None)
     }
 
     fn eval_struct_creation(&self, node: ASTNode, scope: Arw<RuntimeScope>) -> RuntimeValue {
         let (name, props) = node.value.into_struct_creation().unwrap();
 
-        let ty = scope.r().find_dynamic_type(name, Some(node.span));
+        let ty = scope.r().find_type(name, vec![], Some(node.span), None);
 
-        let type_var = scope.r().get_variable(name, Some(node.span));
+        // let type_var = scope.r().get_variable(name, Some(node.span));
 
-        let type_data = match type_var.r().value.r().clone().into_type() {
-            Ok(v) => match v {
-                TypeData::Struct(v) => v,
-            },
-            Err(_) => {
+        let type_data = scope.r().find_type(name, vec![], Some(node.span), None);
+
+        let type_ref = type_data.type_ref.underlying.r().clone();
+
+        match type_ref.structure {
+            TypeStructure::Iota { .. } | TypeStructure::Primitive(_) => {
                 Log::err(
                     format!(
-                        "The variable {} is not Typ.",
-                        AtomStorage::string(name).unwrap()
+                        "The type {} is not a struct.",
+                        name,
                     ),
                     LogOrigin::Interpret,
                 );
                 Log::trace_span(node.span);
                 Control::exit();
             }
-        };
+            TypeStructure::Struct { keys } => {
+                let prop_names = keys.keys().cloned().collect::<Vec<Atom>>();
+                let prop_types = keys.values().cloned().collect::<Vec<BuiltType>>();
 
-        if props.len() != type_data.prop_names.len() {
-            Log::err("Not all keys provided.".to_string(), LogOrigin::Interpret);
-            Log::trace_span(node.span);
-            Control::exit();
-        }
+                if props.len() != prop_names.len() {
+                    Log::err("Not all keys provided.".to_string(), LogOrigin::Interpret);
+                    Log::trace_span(node.span);
+                    Control::exit();
+                }
 
-        let props_ev: HashMap<Atom, RuntimeValue> = props
-            .into_iter()
-            .map(|(k, v)| (k, self.eval_node(v, scope.clone())))
-            .collect();
-        let map_kvs: HashMap<Atom, FinalizedDataType> = {
-            let mut m = HashMap::new();
+                let props_ev: HashMap<Atom, RuntimeValue> = props
+                    .into_iter()
+                    .map(|(k, v)| (k, self.eval_node(v, scope.clone())))
+                    .collect();
+                let map_kvs: HashMap<Atom, BuiltType> = {
+                    let mut m = HashMap::new();
 
-            for i in 0..type_data.prop_types.len() {
-                m.insert(type_data.prop_names[i], type_data.prop_types[i].clone());
+                    for i in 0..prop_types.len() {
+                        m.insert(prop_names[i], prop_types[i].clone());
+                    }
+
+                    m
+                };
+
+                for (k, v) in &props_ev {
+                    let ty = map_kvs.get(k).unwrap();
+
+                    if !ty.call_matches(&v.val) {
+                        Log::err(
+                            format!(
+                                "Provided value for key {} does not match its type of {}.",
+                                AtomStorage::string(*k).unwrap(),
+                                ty.vis()
+                            ),
+                            LogOrigin::Interpret,
+                        );
+                        Log::trace_span(node.span);
+                        Control::exit();
+                    }
+                }
+
+                let rvt = RuntimeValueType::Complex(ComplexData::Struct(ComplexStruct {
+                    name,
+                    prop_names,
+                    prop_types,
+                    data: props_ev,
+                }));
+
+                RuntimeValue::new(
+                    ty, rvt
+                )
             }
-
-            m
-        };
-
-        for (k, v) in &props_ev {
-            let ty = map_kvs.get(k).unwrap();
-
-            if !ty.call_matches(v) {
-                Log::err(
-                    format!(
-                        "Provided value for key {} does not match its type of {}.",
-                        AtomStorage::string(*k).unwrap(),
-                        ty.vis()
-                    ),
-                    LogOrigin::Interpret,
-                );
-                Log::trace_span(node.span);
-                Control::exit();
-            }
         }
-
-        RuntimeValue::Complex(ComplexData::Struct(ComplexStruct {
-            name,
-            prop_names: type_data.prop_names,
-            prop_types: type_data.prop_types,
-            data: props_ev,
-        }))
     }
 
     fn eval_struct_property(&self, node: ASTNode, scope: Arw<RuntimeScope>) -> RuntimeValue {
@@ -724,8 +723,8 @@ impl Interpreter {
         let o_sp = on.span;
         let o_ev = self.eval_node(on.unbox(), scope);
 
-        match o_ev {
-            RuntimeValue::Complex(complex) => match complex {
+        match o_ev.val {
+            RuntimeValueType::Complex(complex) => match complex {
                 ComplexData::Struct(str) => match str.data.get(&name) {
                     None => {
                         Log::err(
@@ -765,14 +764,14 @@ impl Interpreter {
                     Log::trace_span(node.span);
                     Control::exit();
                 } else {
-                    scope.r().try_match(&ev[0]).unwrap()
+                    ev[0].type_ref.clone()
                 }
             }
-            Some(v) => self.find_ty(v.unbox(), scope),
+            Some(v) => self.find_ty(v.unbox(), scope.clone()),
         };
 
         for (i, v) in ev.iter().enumerate() {
-            if !f_ty.call_matches(v) {
+            if !f_ty.call_matches(&v.val) {
                 Log::err(
                     format!(
                         "Array index [{}] does not match array's type {}.",
@@ -786,10 +785,19 @@ impl Interpreter {
             }
         }
 
-        RuntimeValue::Array(ArrayData {
-            ty: f_ty,
+        let rvt = RuntimeValueType::Array(ArrayData {
+            ty: f_ty.clone(),
             values: ev,
-        })
+        });
+
+        let mt = scope.r().find_type(
+            AtomStorage::atom("Arr"),
+            vec![],
+            Some(node.span),
+            None
+        );
+
+        RuntimeValue::new(mt.apply(vec![f_ty]), rvt)
     }
 
     fn eval_array_access(&self, node: ASTNode, scope: Arw<RuntimeScope>) -> RuntimeValue {
@@ -798,7 +806,7 @@ impl Interpreter {
         let on_ev = self.eval_node(on.unbox(), scope.clone());
         let index = self.eval_node(index.unbox(), scope.clone());
 
-        on_ev.index(index, node.span)
+        on_ev.val.index(index.val, node.span)
     }
 
     pub fn scope_ref(&self) -> Arc<Interpreter> {
@@ -807,31 +815,31 @@ impl Interpreter {
 
     fn eval_method(&self, node: ASTNode, scope: Arw<RuntimeScope>) -> RuntimeValue {
         let (name, data_type, fn_box) = node.value.as_method().unwrap();
+        //
+        // let data_type = Self::create_type(data_type.clone().unbox(), scope.clone());
+        //
+        // let func = self.eval_function(fn_box.clone().unbox(), scope.clone());
+        // let f_c = func.clone();
+        //
+        // scope.w().declare_variable(
+        //     *name,
+        //     func,
+        //     true,
+        //     Some(node.span),
+        //     None
+        // );
+        //
+        // let hash = data_type.hashed();
+        //
+        // let scope_w = scope.w();
+        // let mut methods = scope_w.methods.w();
+        //
+        // if !methods.contains_key(&hash) {
+        //     methods.insert(hash, HashMap::new());
+        // }
 
-        let data_type = Self::create_type(data_type.clone().unbox(), scope.clone());
+        // methods.get_mut(&hash).unwrap().insert(*name, f_c);
 
-        let func = self.eval_function(fn_box.clone().unbox(), scope.clone());
-        let f_c = func.clone();
-
-        scope.w().declare_variable(
-            *name,
-            func,
-            true,
-            Some(node.span),
-            None
-        );
-
-        let hash = data_type.hashed();
-
-        let scope_w = scope.w();
-        let mut methods = scope_w.methods.w();
-
-        if !methods.contains_key(&hash) {
-            methods.insert(hash, HashMap::new());
-        }
-
-        methods.get_mut(&hash).unwrap().insert(*name, f_c);
-
-        RuntimeValue::Unit
+        scope.r().unit_type()
     }
 }

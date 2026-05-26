@@ -62,8 +62,7 @@ pub enum ASTNodeValue {
         or_else: Option<Box<ASTNode>>,
     },
     Type {
-        dynamic: bool,
-        content: Vec<Atom>,
+        content: Atom,
         generics: Vec<ASTNode>,
     },
     When {
@@ -82,6 +81,7 @@ pub enum ASTNodeValue {
         args: Vec<ASTNode>,
     },
     StructDefinition {
+        name: Atom,
         prop_names: Vec<Atom>,
         prop_types: Vec<ASTNode>,
     },

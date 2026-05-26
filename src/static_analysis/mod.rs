@@ -3,26 +3,34 @@ use crate::lexer::structs::{OperatorType, Span};
 use crate::log::{Control, Log, LogOrigin};
 use crate::parser::structs::{ASTNode, ASTNodeValue};
 use crate::store::Atom;
-use crate::typed::{DataType, DynamicType, NumTypes, TypeSig};
+use crate::typed::{DataType, DynamicType};
 use crate::util::{Arw, Unbox, arw};
 use std::any::Any;
 use std::collections::HashMap;
+use std::fmt::format;
 use uuid::Uuid;
 
 pub struct SALocalData {
     ty: DataType,
-    struct_def: Option<HashMap<Atom, DataType>>,
     immut: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum UserType {
+    Iota(Vec<Atom>),
+    Struct(HashMap<Atom, DataType>)
 }
 
 pub struct SAScope {
     locals: HashMap<Atom, Arw<SALocalData>>,
+    types: HashMap<Atom, UserType>
 }
 
 impl SAScope {
     pub fn new() -> SAScope {
         SAScope {
             locals: HashMap::new(),
+            types: HashMap::new()
         }
     }
 }
@@ -87,100 +95,100 @@ impl StaticAnalysis {
 
                 match op {
                     OperatorType::Plus => {
-                        if left_type.matches(&DataType::Num(NumTypes::Int))
-                            && right_type.matches(&DataType::Num(NumTypes::Int))
+                        if left_type.matches(&DataType::Int)
+                            && right_type.matches(&DataType::Int)
                         {
-                            return DataType::Num(NumTypes::Int);
+                            return DataType::Int;
                         }
-                        if left_type.matches(&DataType::Num(NumTypes::Flt))
-                            && right_type.matches(&DataType::Num(NumTypes::Flt))
+                        if left_type.matches(&DataType::Flt)
+                            && right_type.matches(&DataType::Flt)
                         {
-                            return DataType::Num(NumTypes::Flt);
+                            return DataType::Flt;
                         }
-                        if left_type.matches(&DataType::Num(NumTypes::Gen))
-                            && right_type.matches(&DataType::Num(NumTypes::Gen))
-                        {
-                            return DataType::Num(NumTypes::Gen);
-                        }
+                        // if left_type.matches(&DataType::Num(NumTypes::Gen))
+                        //     && right_type.matches(&DataType::Num(NumTypes::Gen))
+                        // {
+                        //     return DataType::Num(NumTypes::Gen);
+                        // }
 
                         DataType::Null
                     }
                     OperatorType::Minus => {
-                        if left_type.matches(&DataType::Num(NumTypes::Int))
-                            && right_type.matches(&DataType::Num(NumTypes::Int))
+                        if left_type.matches(&DataType::Int)
+                            && right_type.matches(&DataType::Int)
                         {
-                            return DataType::Num(NumTypes::Int);
+                            return DataType::Int;
                         }
-                        if left_type.matches(&DataType::Num(NumTypes::Flt))
-                            && right_type.matches(&DataType::Num(NumTypes::Flt))
+                        if left_type.matches(&DataType::Flt)
+                            && right_type.matches(&DataType::Flt)
                         {
-                            return DataType::Num(NumTypes::Flt);
+                            return DataType::Flt;
                         }
-                        if left_type.matches(&DataType::Num(NumTypes::Gen))
-                            && right_type.matches(&DataType::Num(NumTypes::Gen))
-                        {
-                            return DataType::Num(NumTypes::Gen);
-                        }
+                        // if left_type.matches(&DataType::Num(NumTypes::Gen))
+                        //     && right_type.matches(&DataType::Num(NumTypes::Gen))
+                        // {
+                        //     return DataType::Num(NumTypes::Gen);
+                        // }
                         DataType::Null
                     }
                     OperatorType::Multiply => {
-                        if left_type.matches(&DataType::Num(NumTypes::Int))
-                            && right_type.matches(&DataType::Num(NumTypes::Int))
+                        if left_type.matches(&DataType::Int)
+                            && right_type.matches(&DataType::Int)
                         {
-                            return DataType::Num(NumTypes::Int);
+                            return DataType::Int;
                         }
-                        if left_type.matches(&DataType::Num(NumTypes::Flt))
-                            && right_type.matches(&DataType::Num(NumTypes::Flt))
+                        if left_type.matches(&DataType::Flt)
+                            && right_type.matches(&DataType::Flt)
                         {
-                            return DataType::Num(NumTypes::Flt);
+                            return DataType::Flt;
                         }
-                        if left_type.matches(&DataType::Num(NumTypes::Gen))
-                            && right_type.matches(&DataType::Num(NumTypes::Gen))
-                        {
-                            return DataType::Num(NumTypes::Gen);
-                        }
-                        if left_type.matches(&DataType::Str) && right_type.matches(&DataType::num())
-                        {
-                            return DataType::Str;
-                        }
+                        // if left_type.matches(&DataType::Num(NumTypes::Gen))
+                        //     && right_type.matches(&DataType::Num(NumTypes::Gen))
+                        // {
+                        //     return DataType::Num(NumTypes::Gen);
+                        // }
+                        // if left_type.matches(&DataType::Str) && right_type.matches(&DataType::())
+                        // {
+                        //     return DataType::Str;
+                        // }
 
                         DataType::Null
                     }
                     OperatorType::Divide => {
-                        if left_type.matches(&DataType::Num(NumTypes::Int))
-                            && right_type.matches(&DataType::Num(NumTypes::Int))
+                        if left_type.matches(&DataType::Int)
+                            && right_type.matches(&DataType::Int)
                         {
-                            return DataType::Num(NumTypes::Gen);
+                            return DataType::Int;
                         }
-                        if left_type.matches(&DataType::Num(NumTypes::Flt))
-                            && right_type.matches(&DataType::Num(NumTypes::Flt))
+                        if left_type.matches(&DataType::Flt)
+                            && right_type.matches(&DataType::Flt)
                         {
-                            return DataType::Num(NumTypes::Flt);
+                            return DataType::Flt;
                         }
-                        if left_type.matches(&DataType::Num(NumTypes::Gen))
-                            && right_type.matches(&DataType::Num(NumTypes::Gen))
-                        {
-                            return DataType::Num(NumTypes::Gen);
-                        }
+                        // if left_type.matches(&DataType::Num(NumTypes::Gen))
+                        //     && right_type.matches(&DataType::Num(NumTypes::Gen))
+                        // {
+                        //     return DataType::Num(NumTypes::Gen);
+                        // }
 
                         DataType::Null
                     }
                     OperatorType::Modulo => {
-                        if left_type.matches(&DataType::Num(NumTypes::Int))
-                            && right_type.matches(&DataType::Num(NumTypes::Int))
+                        if left_type.matches(&DataType::Int)
+                            && right_type.matches(&DataType::Int)
                         {
-                            return DataType::Num(NumTypes::Int);
+                            return DataType::Int;
                         }
-                        if left_type.matches(&DataType::Num(NumTypes::Flt))
-                            && right_type.matches(&DataType::Num(NumTypes::Flt))
+                        if left_type.matches(&DataType::Flt)
+                            && right_type.matches(&DataType::Flt)
                         {
-                            return DataType::Num(NumTypes::Flt);
+                            return DataType::Flt;
                         }
-                        if left_type.matches(&DataType::Num(NumTypes::Gen))
-                            && right_type.matches(&DataType::Num(NumTypes::Gen))
-                        {
-                            return DataType::Num(NumTypes::Gen);
-                        }
+                        // if left_type.matches(&DataType::Num(NumTypes::Gen))
+                        //     && right_type.matches(&DataType::Num(NumTypes::Gen))
+                        // {
+                        //     return DataType::Num(NumTypes::Gen);
+                        // }
                         DataType::Null
                     }
                     OperatorType::Equality => DataType::Bln,
@@ -190,9 +198,9 @@ impl StaticAnalysis {
             }
             ASTNodeValue::Number(v) => {
                 if v.floor() == v {
-                    DataType::Num(NumTypes::Int)
+                    DataType::Int
                 } else {
-                    DataType::Num(NumTypes::Flt)
+                    DataType::Flt
                 }
             }
             ASTNodeValue::Identifier(v) => match self.get_local(&v, node.span, true) {
@@ -226,7 +234,6 @@ impl StaticAnalysis {
                             name,
                             arw(SALocalData {
                                 ty: DataType::Null,
-                                struct_def: None,
                                 immut,
                             }),
                         );
@@ -239,20 +246,20 @@ impl StaticAnalysis {
                     name,
                     arw(SALocalData {
                         ty: data.unwrap_or(type_of_value),
-                        struct_def: if clone_value.value.is_struct_definition() {
-                            let (names, data_types) =
-                                clone_value.value.as_struct_definition().unwrap();
-
-                            let it = names.iter().zip(data_types.iter());
-
-                            Some(
-                                HashMap::from_iter(
-                                    it.map(|(k, v)| (*k, self.type_of(v.clone())))
-                                )
-                            )
-                        } else {
-                            None
-                        },
+                        // struct_def: if clone_value.value.is_struct_definition() {
+                        //     let (names, data_types) =
+                        //         clone_value.value.as_struct_definition().unwrap();
+                        //
+                        //     let it = names.iter().zip(data_types.iter());
+                        //
+                        //     Some(
+                        //         HashMap::from_iter(
+                        //             it.map(|(k, v)| (*k, self.type_of(v.clone())))
+                        //         )
+                        //     )
+                        // } else {
+                        //     None
+                        // },
                         immut,
                     }),
                 );
@@ -300,31 +307,27 @@ impl StaticAnalysis {
                 last
             }
             ASTNodeValue::Type {
-                dynamic,
                 content,
                 generics,
             } => {
-                if dynamic {
-                    let initial = content[0];
+                match DataType::from_atoms(content, generics, self) {
+                    None => {
+                        let ty = self.get_type(&content, node.span, false);
 
-                    let local = self.get_local(&initial, node.span, true).unwrap();
+                        match ty {
+                            None => {
+                                self.push_problem(
+                                    ProblemType::Err,
+                                    node.span,
+                                    format!("Type '{}' is not defined in this scope.", content)
+                                );
 
-                    let struct_def = local.r().struct_def.clone().unwrap();
-                    if local.r().struct_def.is_none() {
-                        self.push_problem(
-                            ProblemType::Err,
-                            node.span,
-                            format!("The definition of {} is not a struct.", initial)
-                        );
-                        return DataType::Null
+                                DataType::Null
+                            }
+                            Some(v) => DataType::UserType(content, v)
+                        }
                     }
-
-                    DataType::Dynamic {
-                        name: initial.to_string(),
-                        value: DynamicType::Struct(struct_def)
-                    }
-                } else {
-                    DataType::from_atoms(content, generics, self)
+                    Some(v) => v
                 }
             },
             ASTNodeValue::If { ifs, or_else } => {
@@ -441,7 +444,6 @@ impl StaticAnalysis {
                         *a_n,
                         arw(SALocalData {
                             ty: self.type_of(arg_types[i].clone()),
-                            struct_def: None,
                             immut: true,
                         })
                     );
@@ -502,41 +504,66 @@ impl StaticAnalysis {
 
                 fnc_gen.last().unwrap().clone()
             }
-            ASTNodeValue::StructDefinition { .. } => {
-                DataType::Typ
+            ASTNodeValue::StructDefinition {
+                name,
+                prop_names,
+                prop_types
+            } => {
+                let mut map = HashMap::new();
+
+                for i in 0..prop_names.len() {
+                    map.insert(
+                        prop_names[i], self.type_of(prop_types[i].clone())
+                    );
+                }
+
+                self.scopes.last().unwrap().w().types.insert(
+                    name, UserType::Struct(
+                        map
+                    )
+                );
+
+                DataType::Uni
             }
             ASTNodeValue::StructCreation { name, props } => {
-                let local = self.get_local(&name, node.span, true).unwrap();
+                let local = self.get_type(
+                    &name, node.span, true
+                );
 
-                if local.r().struct_def.is_none() {
-                    self.push_problem(
-                        ProblemType::Err,
-                        node.span,
-                        format!("The definition of {} is not a struct.", name)
-                    );
+                if local.is_none() {
                     return DataType::Null
                 }
 
-                let struct_def = local.r().struct_def.clone().unwrap();
-                for (field_name, node) in props {
-                    let ty = self.type_of(node.clone());
-
-                    if !ty.matches(
-                        &struct_def[&field_name]
-                    ) {
+                let u = local.unwrap();
+                match &u {
+                    UserType::Iota(_) => {
                         self.push_problem(
                             ProblemType::Err,
                             node.span,
-                            format!("The field '{}' of struct '{}' doesn't match the expected type (found '{}', expected '{}').",
-                                    field_name, name, ty, struct_def[&field_name])
+                            format!("The type {} is not a struct.", &name)
                         );
-                        continue
-                    }
-                }
 
-                return DataType::Dynamic {
-                    name: name.to_string(),
-                    value: DynamicType::Struct(struct_def)
+                        DataType::Null
+                    }
+                    UserType::Struct(struct_def) => {
+                        for (field_name, node) in props {
+                            let ty = self.type_of(node.clone());
+
+                            if !ty.matches(
+                                &struct_def[&field_name]
+                            ) {
+                                self.push_problem(
+                                    ProblemType::Err,
+                                    node.span,
+                                    format!("The field '{}' of struct '{}' doesn't match the expected type (found '{}', expected '{}').",
+                                            field_name, name, ty, struct_def[&field_name])
+                                );
+                                continue
+                            }
+                        }
+
+                        DataType::UserType(name, u)
+                    }
                 }
             },
             ASTNodeValue::ArrayDeclaration { values, ty } => {
@@ -597,18 +624,23 @@ impl StaticAnalysis {
 
                 if on_type.is_struct() {
                     match on_type {
-                        DataType::Dynamic { value: DynamicType::Struct(v), name } => {
-                            match v.get(&property) {
-                                None => {
-                                    self.push_problem(
-                                        ProblemType::Err,
-                                        node.span,
-                                        format!("The field '{}' doesn't exist on type '{}'.", property, &name)
-                                    );
-                                    return DataType::Uni
-                                }
-                                Some(v) => {
-                                    v.clone()
+                        DataType::UserType(name, user_type) => {
+                            match user_type {
+                                UserType::Iota(_) => { DataType::Null }
+                                UserType::Struct(struct_def) => {
+                                    match struct_def.get(&property) {
+                                        None => {
+                                            self.push_problem(
+                                                ProblemType::Err,
+                                                node.span,
+                                                format!("The field '{}' doesn't exist on type '{}'.", property, &name)
+                                            );
+                                            return DataType::Uni
+                                        }
+                                        Some(v) => {
+                                            v.clone()
+                                        }
+                                    }
                                 }
                             }
                         },
@@ -632,7 +664,6 @@ impl StaticAnalysis {
                     name,
                     arw(SALocalData {
                         ty: ty_fn,
-                        struct_def: None,
                         immut: true,
                     })
                 );
@@ -675,6 +706,27 @@ impl StaticAnalysis {
                 ProblemType::Err,
                 trace,
                 format!("Variable '{}' is not defined in this scope.", atom),
+            );
+        }
+
+        None
+    }
+
+    fn get_type(&mut self, atom: &Atom, trace: Span, cause_err: bool) -> Option<UserType> {
+        let mut idx = self.scopes.len() as i32 - 1;
+
+        while idx != -1 {
+            if let Some(v) = self.scopes[idx as usize].r().types.get(atom) {
+                return Some(v.clone());
+            }
+            idx -= 1;
+        }
+
+        if cause_err {
+            self.push_problem(
+                ProblemType::Err,
+                trace,
+                format!("Type '{}' is not defined in this scope.", atom),
             );
         }
 

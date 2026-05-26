@@ -64,11 +64,10 @@ pub enum TokenValue {
 pub enum KeywordType {
     Use,
     Pub,
-    Immut,
+    Val,
     Struct,
+    Iota,
     Fn,
-    Def,
-    Method,
     Feat,
     Let,
     For,
@@ -102,18 +101,17 @@ lazy_static! {
         map of &'static str => KeywordType {
             "use" => KeywordType::Use,
             "pub" => KeywordType::Pub,
-            "immut" => KeywordType::Immut,
+            "val" => KeywordType::Val,
             "struct" => KeywordType::Struct,
             "fn" => KeywordType::Fn,
-            "def" => KeywordType::Def,
-            "method" => KeywordType::Method,
             "feat" => KeywordType::Feat,
             "let" => KeywordType::Let,
             "for" => KeywordType::For,
             "while" => KeywordType::While,
             "if" => KeywordType::If,
             "else" => KeywordType::Else,
-            "when" => KeywordType::When
+            "when" => KeywordType::When,
+            "iota" => KeywordType::Iota
         }
     }.into_iter().map(|(k, v)| (AtomStorage::atom(k.to_string()), v)).collect();
 
@@ -299,9 +297,9 @@ pub enum SignType {
     BackwardArrow,         // <-
     ExclamationMk,         // !
     QuestionMk,            // ?
-    Paren(Direction),      // ( )
-    Brace(Direction),      // [ ]
-    CurlyBrace(Direction), // { }
+    Paren(SignSide),      // ( )
+    Brace(SignSide),      // [ ]
+    CurlyBrace(SignSide), // { }
     EqArrow,               // =>
     DoubleArrow,           // ->>
     Comment,               // //
@@ -319,7 +317,7 @@ pub enum SignType {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub enum Direction {
+pub enum SignSide {
     Open,
     Close,
 }

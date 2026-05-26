@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 
 use crate::lexer::structs::{
-    Direction, Location, OnlyLocation, RESERVED_KEYWORDS, SIGN_CONVERSIONS, SIMPLE_OPERATORS,
+    SignSide, Location, OnlyLocation, RESERVED_KEYWORDS, SIGN_CONVERSIONS, SIMPLE_OPERATORS,
     SIMPLE_SIGNS, SignType, Span, Token, TokenValue,
 };
 use crate::store::sourcemap::SourceMaps;
@@ -105,12 +105,12 @@ pub fn tokenize(file_name: String, raw_input: String) -> VecDeque<Token> {
         }
 
         let single_char_token_value = match char {
-            '(' => Some(TokenValue::Sign(SignType::Paren(Direction::Open))),
-            ')' => Some(TokenValue::Sign(SignType::Paren(Direction::Close))),
-            '[' => Some(TokenValue::Sign(SignType::Brace(Direction::Open))),
-            ']' => Some(TokenValue::Sign(SignType::Brace(Direction::Close))),
-            '{' => Some(TokenValue::Sign(SignType::CurlyBrace(Direction::Open))),
-            '}' => Some(TokenValue::Sign(SignType::CurlyBrace(Direction::Close))),
+            '(' => Some(TokenValue::Sign(SignType::Paren(SignSide::Open))),
+            ')' => Some(TokenValue::Sign(SignType::Paren(SignSide::Close))),
+            '[' => Some(TokenValue::Sign(SignType::Brace(SignSide::Open))),
+            ']' => Some(TokenValue::Sign(SignType::Brace(SignSide::Close))),
+            '{' => Some(TokenValue::Sign(SignType::CurlyBrace(SignSide::Open))),
+            '}' => Some(TokenValue::Sign(SignType::CurlyBrace(SignSide::Close))),
             _ => None,
         };
 

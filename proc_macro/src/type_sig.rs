@@ -6,9 +6,11 @@ use syn::parse::{Parse, ParseStream};
 #[derive(Clone)]
 pub struct TypeSignature {
     pub name: String,
-    pub children: Vec<TypeSignature>,
+    pub matches: Expr,
     pub visual_name: String,
-    pub kind: Ident
+    pub kind: Ident,
+    pub finalized: Expr,
+    pub expr: Expr
 }
 
 mod kw {
@@ -16,6 +18,7 @@ mod kw {
 
     custom_keyword!(children);
     custom_keyword!(kind);
+    custom_keyword!(built);
 }
 
 impl Parse for TypeSignature {
@@ -25,26 +28,31 @@ impl Parse for TypeSignature {
         let content;
         braced!(content in input);
 
+        let struct_kw = content.parse::<Token![struct]>()?;
+        let expr = content.parse::<Expr>()?;
+
+        content.parse::<Token![,]>()?;
+
+        let matches_kw = content.parse::<Token![match]>()?;
+        let matches: Expr = content.parse()?;
+
+        content.parse::<Token![,]>()?;
+
         content.parse::<kw::kind>()?;
 
         let kind: Ident = content.parse()?;
 
-        let mut children: Vec<TypeSignature> = Vec::new();
+        let mut finalized = matches.clone();
 
-        if content.peek(Token![,]) {
+        if content.peek(Token![,]) && content.peek2(kw::built) {
             content.parse::<Token![,]>()?;
-            content.parse::<kw::children>()?;
+            content.parse::<kw::built>()?;
 
-            let cntnt;
-            braced!(cntnt in content);
-
-            let children_def = cntnt.parse_terminated(TypeSignature::parse, Token![,])?;
-
-            children = children_def.into_iter().collect();
+            finalized = content.parse()?;
         }
 
         Ok(TypeSignature {
-            name: name.to_string(), children, kind, visual_name: name.to_string()
+            name: name.to_string(), matches, kind, visual_name: name.to_string(), finalized, expr
         })
     }
 }
@@ -53,22 +61,18 @@ impl ToTokens for TypeSignature {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let name = &self.name;
         let kind = &self.kind;
-        let vis_name = &self.visual_name;
-
-
-        let mut c = self.children.clone();
-        let children: Vec<&mut TypeSignature> = c.iter_mut().map(|x| { x.visual_name = format!("{name}.{}", x.visual_name); x }).collect();
+        let matches = &self.matches;
+        let matches_fn = &self.finalized;
+        let expr =  &self.expr;
 
         tokens.append_all(
             quote! {
-                (AtomStorage::atom(#name.to_string()), Arc::new(TypeSig {
-                    name: #name.to_string(),
+                (AtomStorage::atom(#name.to_string()), Arc::new(TypeSignature {
+                    name: AtomStorage::atom(#name),
                     kind: DataTypeKind::#kind,
-                    visual_name: #vis_name.to_string(),
-                    generics: Vec::new(),
-                    children: HashMap::from([
-                        #(#children),*
-                    ])
+                    matches: Arc::new(#matches),
+                    matches_built: Arc::new(#matches_fn),
+                    underlying: Arc::new(Rw::new(#expr))
                 }))
             }
         );

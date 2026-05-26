@@ -1,5 +1,5 @@
 use crate::compile::Compiler;
-use crate::interpret::structs::RuntimeValue;
+use crate::interpret::structs::RuntimeValueType;
 use crate::interpret::{Interpreter, RuntimeScope};
 use crate::lexer::tokenize;
 use crate::log::{Log, LogOrigin};
@@ -7,14 +7,14 @@ use crate::parser::Parser;
 use crate::static_analysis::StaticAnalysis;
 use crate::store::AtomStorage;
 use crate::typed::DataTypeKind;
-use crate::typed::TypeSig;
-use crate::typed::{DataTypeSignature, Types};
+use crate::typed::{TypeSignature, Types};
 use crate::util::arw;
 use crate::vm::VM;
-use proc_macro::{type_signature, yuke_type};
+use proc_macro::{type_signature};
 use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
+use std::time::Instant;
 
 mod compile;
 pub mod interpret;
@@ -28,87 +28,102 @@ mod util;
 mod vm;
 
 mod interpret_types {
+    use crate::typed::TypeStructure;
+    use crate::util::Rw;
     use crate::Arc;
-    use crate::interpret::structs::RuntimeValue;
+    use crate::interpret::structs::RuntimeValueType;
     use crate::store::AtomStorage;
-    use crate::typed::{DataTypeKind, DataTypeSignature, Types};
+    use crate::typed::{DataTypeKind, TypeSignature, UnderlyingType, Types};
     use proc_macro::type_signature;
     use std::collections::HashMap;
 
     pub fn types(types: &Types) {
-        let numerics = type_signature! {
-            Num {
-                match |t, v| { matches!(v, RuntimeValue::Number(_)) },
-                kind BuiltIn,
-                children {
-                    Int {
-                        match |t, v| { matches!(v, RuntimeValue::Number(x) if &x.floor() == x) },
-                        kind BuiltIn
-                    },
-                    Flt {
-                        match |t, v| { matches!(v, RuntimeValue::Number(x) if &x.floor() != x) },
-                        kind BuiltIn
-                    },
-                }
+        let flt = type_signature! {
+            Flt {
+                struct UnderlyingType::new(
+                    TypeStructure::Primitive("Flt".to_string())
+                ),
+                match |t, v| { matches!(v, RuntimeValueType::Number(x) if x.floor() != *x) },
+                kind BuiltIn
+            }
+        };
+        let int = type_signature! {
+            Int {
+                struct UnderlyingType::new(
+                    TypeStructure::Primitive("Int".to_string())
+                ),
+                match |t, v| { matches!(v, RuntimeValueType::Number(x) if x.floor() == *x) },
+                kind BuiltIn
             }
         };
         let string = type_signature! {
             Str {
-                match |t, v| { matches!(v, RuntimeValue::String(_)) },
+                struct UnderlyingType::new(
+                    TypeStructure::Primitive("Str".to_string())
+                ),
+                match |t, v| { matches!(v, RuntimeValueType::String(_)) },
                 kind BuiltIn
             }
         };
         let bool = type_signature! {
             Bln {
-                match |t, v| { matches!(v, RuntimeValue::Boolean(_)) },
+                struct UnderlyingType::new(
+                    TypeStructure::Primitive("Bln".to_string())
+                ),
+                match |t, v| { matches!(v, RuntimeValueType::Boolean(_)) },
                 kind BuiltIn
             }
         };
         let fnc = type_signature! {
             Fnc {
-                match |t, v| { matches!(v, RuntimeValue::Function(_) )},
+                struct UnderlyingType::new(
+                    TypeStructure::Primitive("Fnc".to_string())
+                ),
+                match |t, v| { matches!(v, RuntimeValueType::Function(_) )},
                 kind BuiltIn,
-                finalized |t, v| {
-                    matches!(v, RuntimeValue::Function(fd) if fd.matches_generics(&t.generics))
+                built |t, v| {
+                    matches!(v, RuntimeValueType::Function(fd) if fd.matches_generics(&t.generics))
                 }
             }
         };
         let unit = type_signature! {
             Uni {
-                match |t, v| { matches!(v, RuntimeValue::Unit) },
-                kind BuiltIn
-            }
-        };
-        let typ = type_signature! {
-            Typ {
-                match |t, v| { matches!(v, RuntimeValue::Type(_)) },
+                struct UnderlyingType::new(
+                    TypeStructure::Primitive("Uni".to_string())
+                ),
+                match |t, v| { matches!(v, RuntimeValueType::Unit) },
                 kind BuiltIn
             }
         };
         let any = type_signature! {
             Any {
+                struct UnderlyingType::new(
+                    TypeStructure::Primitive("Any".to_string())
+                ),
                 match |_, _| { true },
                 kind BuiltIn
             }
         };
         let arr = type_signature! {
             Arr {
-                match |t, v| { matches!(v, RuntimeValue::Array(_) )},
+                struct UnderlyingType::new(
+                    TypeStructure::Primitive("Arr".to_string())
+                ),
+                match |t, v| { matches!(v, RuntimeValueType::Array(_) )},
                 kind BuiltIn,
-                finalized |t, v| {
-                    matches!(v, RuntimeValue::Array(arr) if arr.ty == t.generics[0] || t.generics[0].name == "Any")
+                built |t, v| {
+                    matches!(v, RuntimeValueType::Array(arr) if arr.ty == t.generics[0] || t.generics[0].type_ref.name == AtomStorage::atom("Any"))
                     // todo! WORKAROUND, NEEDS TO BE REFACTORED TO HANDLE TYPE CASTS   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
                 }
             }
         };
 
-
+        types.add_type(flt);
+        types.add_type(int);
         types.add_type(unit);
-        types.add_type(numerics);
         types.add_type(string);
         types.add_type(bool);
         types.add_type(fnc);
-        types.add_type(typ);
         types.add_type(arr);
         types.add_type(any);
     }
@@ -121,46 +136,12 @@ fn main() {
 
     let tk = tokenize("main.yk".to_string(), file.to_string());
 
-    // dbg!(&tk);
-
-    // let numerics = yuke_type! {
-    //     Num {
-    //         kind BuiltIn,
-    //         children {
-    //             Int {
-    //                 kind BuiltIn
-    //             },
-    //             Flt {
-    //                 kind BuiltIn
-    //             }
-    //         }
-    //     }
-    // };
-    //
-    // let string = yuke_type! {
-    //     Str {
-    //         kind BuiltIn
-    //     }
-    // };
-    //
-    // let bool = yuke_type! {
-    //     Bln {
-    //         kind BuiltIn
-    //     }
-    // };
-
-    //
-    // GlobalTypes::add_type(numerics);
-    // GlobalTypes::add_type(string);
-    // GlobalTypes::add_type(bool);
-    // GlobalYukeTypes::add_type(fnc);
-    // GlobalYukeTypes::add_type(unit);
-    // GlobalYukeTypes::add_type(typ);
-    // GlobalYukeTypes::add_type(arr);
+    let instant = Instant::now();
 
     let ast = Parser { tokens: tk }.ast();
 
     dbg!(&ast);
+    println!("Execution took {}ms", instant.elapsed().as_millis());
 
     let mut analysis = StaticAnalysis::new();
 

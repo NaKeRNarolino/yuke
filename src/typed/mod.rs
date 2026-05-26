@@ -1,5 +1,5 @@
 use crate::interpret::RuntimeScope;
-use crate::interpret::structs::RuntimeValue;
+use crate::interpret::structs::RuntimeValueType;
 use crate::lexer::structs::Span;
 use crate::log::{Control, Log, LogOrigin};
 use crate::parser::structs::ASTNode;
@@ -9,34 +9,77 @@ use lazy_static::lazy_static;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::{Debug, Display, Formatter, Write};
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::marker::PhantomData;
 use std::sync::Arc;
 use colored::Colorize;
 use uuid::Uuid;
 use walrus::Data;
-use crate::static_analysis::StaticAnalysis;
+use crate::static_analysis::{StaticAnalysis, UserType};
 
 #[derive(Clone)]
-pub struct DataTypeSignature {
-    pub name: String,
-    pub visual_name: String,
+pub struct TypeSignature {
+    pub name: Atom,
     pub kind: DataTypeKind,
-    pub matches: Arc<fn(Arc<DataTypeSignature>, &RuntimeValue) -> bool>,
-    pub matches_finalized: Arc<fn(FinalizedDataType, &RuntimeValue) -> bool>,
-    pub children: HashMap<Atom, Arc<DataTypeSignature>>,
+    pub underlying: Arc<Rw<UnderlyingType>>,
+    pub matches: Arc<fn(Arc<TypeSignature>, &RuntimeValueType) -> bool>,
+    pub matches_built: Arc<fn(BuiltType, &RuntimeValueType) -> bool>
+}
+
+#[derive(Clone, Hash)]
+pub struct UnderlyingType {
+    pub methods: Vec<i32>, // todo!
+    pub structure: TypeStructure
+}
+
+impl UnderlyingType {
+    pub fn new(st: TypeStructure) -> Self {
+        Self {
+            methods: Vec::new(),
+            structure: st,
+        }
+    }
 }
 
 #[derive(Clone)]
-pub struct TypeSig {
-    pub name: String,
-    pub visual_name: String,
-    pub kind: DataTypeKind,
-    pub children: HashMap<Atom, Arc<TypeSig>>,
-    pub generics: Vec<TypeSig>,
+pub enum TypeStructure {
+    Struct {
+        keys: HashMap<Atom, BuiltType>
+    },
+    Iota {
+        symbols: Vec<Atom>
+    },
+    Primitive(String)
+}
+
+impl Hash for TypeStructure {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            TypeStructure::Struct { keys } => {
+                keys.keys().collect::<Vec<&Atom>>().hash(state);
+                keys.values().collect::<Vec<&BuiltType>>().hash(state);
+            }
+            TypeStructure::Iota {
+                symbols,
+            } => symbols.hash(state),
+            TypeStructure::Primitive(name) => {
+                name.hash(state)
+            }
+        }
+    }
+}
+
+impl Hash for TypeSignature {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+        self.kind.hash(state);
+        self.underlying.r().hash(state);
+    }
 }
 
 #[derive(PartialEq, Clone, Debug)]
 pub enum DataType {
-    Num(NumTypes),
+    Int,
+    Flt,
     Bln,
     Str,
     Uni,
@@ -44,8 +87,8 @@ pub enum DataType {
     Typ,
     Any,
     Fnc(Vec<DataType>),
-    Dynamic { name: String, value: DynamicType },
     Array(Box<DataType>),
+    UserType(Atom, UserType)
 }
 
 #[derive(PartialEq, Clone, Debug)]
@@ -53,24 +96,11 @@ pub enum DynamicType {
     Struct(HashMap<Atom, DataType>)
 }
 
-#[derive(PartialEq, Clone, Debug)]
-pub enum NumTypes {
-    Int,
-    Flt,
-    Gen,
-}
-
 impl Display for DataType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_fmt(format_args!("{}", &match self {
-            DataType::Num(nt) => format!(
-                "Num{}",
-                if nt.to_string() != "*" {
-                    format!("{}{}", ".", nt.to_string())
-                } else {
-                    "".to_string()
-                }
-            ),
+            DataType::Int => "Int".to_string(),
+            DataType::Flt => "Flt".to_string(),
             DataType::Bln => "Bln".to_string(),
             DataType::Str => "Str".to_string(),
             DataType::Uni => "Uni".to_string(),
@@ -78,26 +108,15 @@ impl Display for DataType {
             DataType::Typ { .. } => "Typ".to_string(),
             DataType::Fnc(g) => format!("Fnc<{}>",
                                         g.iter().map(|x| x.to_string()).collect::<Vec<String>>().join(",")),
-            DataType::Dynamic { name, .. } => format!("?{}", name),
             DataType::Array(t) => format!("Arr<{}>", t),
-            DataType::Any => "Any".to_string()
+            DataType::Any => "Any".to_string(),
+            _ => "<*>".to_string()
         }.yellow()))
     }
 }
 
-impl Display for NumTypes {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            NumTypes::Int => "Int",
-            NumTypes::Flt => "Flt",
-            NumTypes::Gen => "*",
-        })
-    }
-}
-
 impl DataType {
-    pub fn from_atoms(atoms: Vec<Atom>, generics: Vec<ASTNode>, sa: &mut StaticAnalysis) -> DataType {
-        let num_atom = AtomStorage::atom("Num".to_string());
+    pub fn from_atoms(atom: Atom, generics: Vec<ASTNode>, sa: &mut StaticAnalysis) -> Option<DataType> {
         let int_atom = AtomStorage::atom("Int".to_string());
         let flt_atom = AtomStorage::atom("Flt".to_string());
         let str_atom = AtomStorage::atom("Str".to_string());
@@ -107,31 +126,25 @@ impl DataType {
         let arr_atom = AtomStorage::atom("Arr".to_string());
         let fnc_atom = AtomStorage::atom("Fnc".to_string());
 
-        if atoms[0] == num_atom {
-            DataType::Num(if let Some(v) = atoms.get(1) {
-                if v == &int_atom {
-                    NumTypes::Int
-                } else {
-                    NumTypes::Flt
-                }
-            } else {
-                NumTypes::Gen
-            })
-        } else if atoms[0] == str_atom {
-            DataType::Str
-        } else if atoms[0] == bln_atom {
-            DataType::Bln
-        } else if atoms[0] == uni_atom {
-            DataType::Uni
-        } else if atoms[0] == any_atom {
-            DataType::Any
-        } else if atoms[0] == arr_atom {
+        if atom == int_atom {
+            Some(DataType::Int)
+        } else if atom == flt_atom {
+            Some(DataType::Flt)
+        } else if atom == str_atom {
+            Some(DataType::Str)
+        } else if atom == bln_atom {
+            Some(DataType::Bln)
+        } else if atom == uni_atom {
+            Some(DataType::Uni)
+        } else if atom == any_atom {
+            Some(DataType::Any)
+        } else if atom == arr_atom {
             assert_eq!(generics.len(), 1);
             let g = sa.type_of(generics[0].clone());
 
-            DataType::Array(Box::new(g))
+            Some(DataType::Array(Box::new(g)))
         } else {
-            DataType::Null
+            None
         }
     }
 
@@ -141,20 +154,15 @@ impl DataType {
 
     pub fn can_be_cast_into(&self, other: &Self) -> bool {
         match (self, other) {
-            (DataType::Num(NumTypes::Int), DataType::Num(NumTypes::Gen)) => true,
-            (DataType::Num(NumTypes::Flt), DataType::Num(NumTypes::Gen)) => true,
+            (DataType::Flt, DataType::Int) => true,
             (DataType::Array(t), DataType::Array(tt)) => t.matches(&tt),
             (_, DataType::Any) => true,
             (_, _) => false,
         }
     }
 
-    pub fn num() -> DataType {
-        DataType::Num(NumTypes::Gen)
-    }
-
     pub fn is_num(&self) -> bool {
-        matches!(self, DataType::Num(_))
+        matches!(self, DataType::Int) && matches!(self, DataType::Flt)
     }
 
     pub fn is_str(&self) -> bool {
@@ -169,111 +177,81 @@ impl DataType {
         matches!(self, DataType::Uni)
     }
 
-    pub fn is_struct(&self) -> bool {
-        matches!(self, DataType::Dynamic { value: DynamicType::Struct(_), .. })
-    }
-
     pub fn is_fnc(&self) -> bool {
         matches!(self, DataType::Fnc(_))
+    }
+
+    pub fn is_struct(&self) -> bool {
+        matches!(self, DataType::UserType(_, UserType::Struct(_)))
     }
 
     pub fn is_arr(&self) -> bool { matches!(self, DataType::Array(_)) }
 }
 
-impl TypeSig {
-    pub fn generics(&self, generics: Vec<TypeSig>) -> Self {
-        let mut s_c = self.clone();
-        s_c.generics = generics;
-        s_c
-    }
-}
-
-impl PartialEq for TypeSig {
-    fn eq(&self, other: &Self) -> bool {
-        (self.name == other.name
-            && self.kind == other.kind
-            && self.visual_name == other.visual_name)
-    }
-}
 
 #[derive(Clone)]
-pub struct FinalizedDataType {
-    pub name: String,
-    pub visual_name: String,
-    pub matches: Arc<dyn Fn(FinalizedDataType, &RuntimeValue) -> bool>,
-    pub generics: Vec<FinalizedDataType>,
-    pub uuid: Uuid,
+pub struct BuiltType {
+    pub type_ref: Arc<TypeSignature>,
+    pub matches: Arc<dyn Fn(BuiltType, &RuntimeValueType) -> bool>,
+    pub generics: Vec<BuiltType>,
 }
 
-impl PartialEq for FinalizedDataType {
+impl PartialEq for BuiltType {
     fn eq(&self, other: &Self) -> bool {
-        self.name == other.name && self.generics == other.generics && self.uuid == other.uuid
+        self.hashed() == other.hashed()
     }
 }
 
 pub trait CallMatches {
-    fn call_matches(&self, value: &RuntimeValue) -> bool;
+    fn call_matches(&self, value: &RuntimeValueType) -> bool;
 }
 
-impl CallMatches for Arc<DataTypeSignature> {
-    fn call_matches(&self, value: &RuntimeValue) -> bool {
+impl CallMatches for Arc<TypeSignature> {
+    fn call_matches(&self, value: &RuntimeValueType) -> bool {
         (self.clone().matches)(self.clone(), value)
     }
 }
 
-impl CallMatches for FinalizedDataType {
-    fn call_matches(&self, value: &RuntimeValue) -> bool {
+impl CallMatches for BuiltType {
+    fn call_matches(&self, value: &RuntimeValueType) -> bool {
         (self.matches)(self.clone(), value)
     }
 }
 
-impl Debug for DataTypeSignature {
+impl Debug for TypeSignature {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str("{ Data Type Signature }")
     }
 }
 
-impl Debug for FinalizedDataType {
+impl Debug for BuiltType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(&format!(
             "{{ Data Type Signature of {} }}",
-            &self.visual_name
+            &self.type_ref.name
         ))
     }
 }
 
-impl From<DataTypeSignature> for FinalizedDataType {
-    fn from(value: DataTypeSignature) -> Self {
+
+impl From<Arc<TypeSignature>> for BuiltType {
+    fn from(value: Arc<TypeSignature>) -> Self {
         Self {
-            uuid: Uuid::new_v5(&Uuid::NAMESPACE_OID, &value.name.as_ref()),
-            name: value.name,
-            visual_name: value.visual_name,
-            matches: value.matches_finalized,
+            type_ref: value.clone(),
+            matches: value.matches_built.clone(),
             generics: Vec::new(),
         }
     }
 }
 
-impl From<Arc<DataTypeSignature>> for FinalizedDataType {
-    fn from(value: Arc<DataTypeSignature>) -> Self {
-        Self {
-            uuid: Uuid::new_v5(&Uuid::NAMESPACE_OID, &value.name.as_ref()),
-            name: value.name.clone(),
-            visual_name: value.visual_name.clone(),
-            matches: value.matches_finalized.clone(),
-            generics: Vec::new(),
-        }
-    }
-}
-
-impl Hash for FinalizedDataType {
+impl Hash for BuiltType {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.name.hash(state);
+        self.type_ref.hash(state);
         self.generics.hash(state);
     }
 }
 
-impl FinalizedDataType {
+impl BuiltType {
     pub fn hashed(&self) -> u64 {
         let mut hasher = DefaultHasher::new();
         self.hash(&mut hasher);
@@ -281,58 +259,11 @@ impl FinalizedDataType {
     }
 }
 
-impl TypeSig {
-    pub fn vis(&self) -> String {
-        format!(
-            "{}{}",
-            &self.visual_name,
-            if !self.generics.is_empty() {
-                format!(
-                    "<{}>",
-                    self.generics
-                        .iter()
-                        .map(|x| x.vis())
-                        .collect::<Vec<String>>()
-                        .join(", ")
-                )
-            } else {
-                "".to_string()
-            }
-        )
-    }
-
-    pub fn null() -> TypeSig {
-        TypeSig {
-            name: "Null".to_string(),
-            visual_name: "Null".to_string(),
-            kind: DataTypeKind::BuiltIn,
-            children: HashMap::new(),
-            generics: Vec::new(),
-        }
-    }
-
-    pub fn uni() -> TypeSig {
-        TypeSig {
-            name: "Uni".to_string(),
-            visual_name: "Uni".to_string(),
-            kind: DataTypeKind::BuiltIn,
-            children: HashMap::new(),
-            generics: Vec::new(),
-        }
-    }
-}
-
-impl Display for TypeSig {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.vis())
-    }
-}
-
-impl FinalizedDataType {
+impl BuiltType {
     pub(crate) fn vis(&self) -> String {
         format!(
             "{}{}",
-            &self.visual_name,
+            &self.type_ref.name,
             if !self.generics.is_empty() {
                 format!(
                     "<{}>",
@@ -348,21 +279,21 @@ impl FinalizedDataType {
         )
     }
 
-    pub fn apply(mut self, generics: Vec<FinalizedDataType>) -> Self {
+    pub fn apply(mut self, generics: Vec<BuiltType>) -> Self {
         self.generics = generics;
         self
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Hash)]
 pub enum DataTypeKind {
     BuiltIn,
-    Mod,
+    User
 }
 
 #[derive(Debug)]
 pub struct Types {
-    pub types: Rw<HashMap<Atom, Arc<DataTypeSignature>>>,
+    pub types: Rw<HashMap<Atom, Arc<TypeSignature>>>,
 }
 
 // pub struct GlobalYukeTypes;
@@ -374,7 +305,7 @@ impl Types {
         }
     }
 
-    pub fn add_type(&self, types: (Atom, Arc<DataTypeSignature>)) {
+    pub fn add_type(&self, types: (Atom, Arc<TypeSignature>)) {
         self.types.w().insert(types.0, types.1);
     }
 
@@ -384,55 +315,30 @@ impl Types {
 
     pub fn find_type(
         &self,
-        mut target_type: VecDeque<Atom>,
+        mut target_type: Atom,
         generics: Vec<ASTNode>,
         trace: Option<Span>,
         scope: &RuntimeScope,
-    ) -> FinalizedDataType {
-        let name = Vec::from(target_type.clone())
-            .iter()
-            .map(|x| AtomStorage::string(*x).unwrap().as_str())
-            .collect::<Vec<&str>>()
-            .join(".");
-        let initial = *target_type.front().unwrap();
-
-        if self.types.r().contains_key(&initial) {
-            target_type.pop_front();
+    ) -> BuiltType {
+        if self.types.r().contains_key(&target_type) {
             let tp = self.types.r();
-            let mut kv = tp.get(&initial).unwrap();
-
-            while !target_type.is_empty() {
-                let next = target_type.pop_front().unwrap();
-                kv = match kv.children.get(&next) {
-                    None => {
-                        Log::err(
-                            format!("Type '{}' couldn't be found.", &name),
-                            LogOrigin::Interpret,
-                        );
-                        if let Some(tr) = trace {
-                            Log::trace_span(tr);
-                        }
-                        Control::exit();
-                    }
-                    Some(v) => v,
-                }
-            }
+            let mut kv = tp.get(&target_type).unwrap();
 
             let t = kv.clone();
 
-            FinalizedDataType::from(t).apply(
+            BuiltType::from(t).apply(
                 generics
                     .iter()
                     .map(|x| {
-                        let (dy, tp, tg) = x.value.clone().into_type().unwrap();
+                        let ( tp, tg) = x.value.clone().into_type().unwrap();
 
-                        scope.find_type(tp.into(), tg, dy, Some(x.span), None)
+                        scope.find_type(tp.into(), tg, Some(x.span), None)
                     })
                     .collect(),
             )
         } else {
             Log::err(
-                format!("Type '{}' couldn't be found.", &name),
+                format!("Type '{}' couldn't be found.", &target_type),
                 LogOrigin::Interpret,
             );
             if let Some(tr) = trace {
@@ -442,97 +348,14 @@ impl Types {
         }
     }
 }
-//
-// impl GlobalYukeTypes {
-//     pub fn add_type(types: (Atom, Arc<TypeSig>)) {
-//         GLOBAL_Y_TYPES.w().insert(types.0, types.1);
-//     }
-//
-//     pub fn has_type(target_type: Atom) -> bool {
-//         GLOBAL_Y_TYPES.r().contains_key(&target_type)
-//     }
-//
-//     pub fn find_type_s(
-//         target_type: Vec<impl Into<String>>,
-//         generics: Vec<ASTNode>,
-//         trace: Option<Span>,
-//     ) -> TypeSig {
-//         Self::find_type(
-//             target_type
-//                 .into_iter()
-//                 .map(|x| AtomStorage::atom(x.into()))
-//                 .collect(),
-//             generics,
-//             trace,
-//         )
-//     }
-//
-//     pub fn find_type(
-//         mut target_type: VecDeque<Atom>,
-//         generics: Vec<ASTNode>,
-//         trace: Option<Span>,
-//     ) -> TypeSig {
-//         let name = Vec::from(target_type.clone())
-//             .iter()
-//             .map(|x| AtomStorage::string(*x).unwrap().as_str())
-//             .collect::<Vec<&str>>()
-//             .join(".");
-//         let initial = *target_type.front().unwrap();
-//
-//         if GLOBAL_Y_TYPES.r().contains_key(&initial) {
-//             target_type.pop_front();
-//             let tp = GLOBAL_Y_TYPES.r();
-//             let mut kv = tp.get(&initial).unwrap();
-//
-//             while !target_type.is_empty() {
-//                 let next = target_type.pop_front().unwrap();
-//                 kv = match kv.children.get(&next) {
-//                     None => {
-//                         Log::err(
-//                             format!("Type '{}' couldn't be found.", &name),
-//                             LogOrigin::Interpret,
-//                         );
-//                         if let Some(tr) = trace {
-//                             Log::trace_span(tr);
-//                         }
-//                         Control::exit();
-//                     }
-//                     Some(v) => v,
-//                 }
-//             }
-//
-//             let t = kv.clone();
-//
-//             (t).generics(
-//                 generics
-//                     .iter()
-//                     .map(|x| {
-//                         let (dy, tp, tg) = x.value.clone().into_type().unwrap();
-//
-//                         GlobalYukeTypes::find_type(tp.into(), tg, Some(x.span))
-//                     })
-//                     .collect(),
-//             )
-//         } else {
-//             Log::err(
-//                 format!("Type '{}' couldn't be found.", &name),
-//                 LogOrigin::Interpret,
-//             );
-//             if let Some(tr) = trace {
-//                 Log::trace_span(tr);
-//             }
-//             Control::exit();
-//         }
-//     }
-// }
 
 pub fn process_special_cases(
-    ty: Arc<DataTypeSignature>,
-    value: &RuntimeValue,
-) -> FinalizedDataType {
+    ty: Arc<TypeSignature>,
+    value: &RuntimeValueType,
+) -> BuiltType {
     match value {
-        RuntimeValue::Function(fd) => {
-            let mut v: FinalizedDataType = ty.into();
+        RuntimeValueType::Function(fd) => {
+            let mut v: BuiltType = ty.into();
 
             let mut generics = fd.arg_types.clone();
             generics.push(fd.ret_type.clone());
@@ -541,8 +364,8 @@ pub fn process_special_cases(
 
             v
         }
-        RuntimeValue::Array(ad) => {
-            let mut v: FinalizedDataType = ty.into();
+        RuntimeValueType::Array(ad) => {
+            let mut v: BuiltType = ty.into();
 
             let generics = vec![ad.ty.clone()];
 
@@ -555,27 +378,19 @@ pub fn process_special_cases(
 }
 
 pub fn try_match(
-    set: &HashMap<Atom, Arc<DataTypeSignature>>,
-    value: &RuntimeValue,
-) -> Option<FinalizedDataType> {
-    let mut matched: Option<FinalizedDataType> = None;
+    set: &HashMap<Atom, Arc<TypeSignature>>,
+    value: &RuntimeValueType,
+) -> Option<BuiltType> {
+    let mut matched: Option<BuiltType> = None;
 
     for (k, t) in set {
         let matches = (t.matches)(t.clone(), value);
 
         if matches {
-            if !t.children.is_empty() {
-                matched = try_match(&t.children, value);
-            } else {
-                matched = Some(process_special_cases(t.clone(), value));
-            }
+            matched = Some(process_special_cases(t.clone(), value));
             break;
         }
     }
 
     matched
-}
-
-lazy_static! {
-    // pub static ref GLOBAL_Y_TYPES: Rw<HashMap<Atom, Arc<TypeSig>>> = Rw::new(HashMap::new());
 }

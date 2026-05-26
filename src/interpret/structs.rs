@@ -3,7 +3,7 @@ use crate::lexer::structs::Span;
 use crate::log::{Control, Log, LogOrigin};
 use crate::parser::structs::ASTNode;
 use crate::store::Atom;
-use crate::typed::{DataTypeSignature, FinalizedDataType};
+use crate::typed::{TypeSignature, BuiltType};
 use crate::util::{Arw, Rw};
 use enum_as_inner::EnumAsInner;
 use std::cmp::PartialEq;
@@ -12,13 +12,26 @@ use std::ops::{Add, Div, Mul, Rem, Sub};
 use std::sync::Arc;
 use uuid::Uuid;
 
+#[derive(Debug, Clone)]
+pub struct RuntimeValue {
+    pub type_ref: BuiltType,
+    pub val: RuntimeValueType
+}
+
+impl RuntimeValue {
+    pub fn new(type_ref: BuiltType, val: RuntimeValueType) -> Self {
+        Self {
+            type_ref, val
+        }
+    }
+}
+
 #[derive(Debug, Clone, EnumAsInner)]
-pub enum RuntimeValue {
+pub enum RuntimeValueType {
     Number(f64),
     String(String),
     Boolean(bool),
     Function(FunctionData),
-    Type(TypeData),
     Complex(ComplexData),
     Array(ArrayData),
     Unit,
@@ -67,13 +80,13 @@ pub trait BinExpLogicals {
     fn l_or(self, rhs: Self, trace: Span) -> Self::Output;
 }
 
-impl BinExpAdd for RuntimeValue {
-    type Output = RuntimeValue;
+impl BinExpAdd for RuntimeValueType {
+    type Output = RuntimeValueType;
 
     fn add(self, rhs: Self, trace: Span) -> Self::Output {
         match (self, rhs) {
-            (RuntimeValue::Number(x), RuntimeValue::Number(y)) => RuntimeValue::Number(x + y),
-            (RuntimeValue::Boolean(x), RuntimeValue::Boolean(y)) => RuntimeValue::Boolean(x || y),
+            (RuntimeValueType::Number(x), RuntimeValueType::Number(y)) => RuntimeValueType::Number(x + y),
+            (RuntimeValueType::Boolean(x), RuntimeValueType::Boolean(y)) => RuntimeValueType::Boolean(x || y),
             (f, s) => {
                 Log::err(
                     format!("Operation '+' is not implemented for {:?} and {:?}.", f, s),
@@ -86,16 +99,16 @@ impl BinExpAdd for RuntimeValue {
     }
 }
 
-impl BinExpMul for RuntimeValue {
-    type Output = RuntimeValue;
+impl BinExpMul for RuntimeValueType {
+    type Output = RuntimeValueType;
 
     fn mul(self, rhs: Self, trace: Span) -> Self::Output {
         match (self, rhs) {
-            (RuntimeValue::Number(x), RuntimeValue::Number(y)) => RuntimeValue::Number(x * y),
-            (RuntimeValue::String(x), RuntimeValue::Number(y)) => {
-                RuntimeValue::String(x.repeat(y.floor() as usize))
+            (RuntimeValueType::Number(x), RuntimeValueType::Number(y)) => RuntimeValueType::Number(x * y),
+            (RuntimeValueType::String(x), RuntimeValueType::Number(y)) => {
+                RuntimeValueType::String(x.repeat(y.floor() as usize))
             }
-            (RuntimeValue::Boolean(x), RuntimeValue::Boolean(y)) => RuntimeValue::Boolean(x && y),
+            (RuntimeValueType::Boolean(x), RuntimeValueType::Boolean(y)) => RuntimeValueType::Boolean(x && y),
             (f, s) => {
                 Log::err(
                     format!("Operation '*' is not implemented for {:?} and {:?}.", f, s),
@@ -108,12 +121,12 @@ impl BinExpMul for RuntimeValue {
     }
 }
 
-impl BinExpDiv for RuntimeValue {
-    type Output = RuntimeValue;
+impl BinExpDiv for RuntimeValueType {
+    type Output = RuntimeValueType;
 
     fn div(self, rhs: Self, trace: Span) -> Self::Output {
         match (self, rhs) {
-            (RuntimeValue::Number(x), RuntimeValue::Number(y)) => RuntimeValue::Number(x / y),
+            (RuntimeValueType::Number(x), RuntimeValueType::Number(y)) => RuntimeValueType::Number(x / y),
             (f, s) => {
                 Log::err(
                     format!("Operation '/' is not implemented for {:?} and {:?}.", f, s),
@@ -126,12 +139,12 @@ impl BinExpDiv for RuntimeValue {
     }
 }
 
-impl BinExpSub for RuntimeValue {
-    type Output = RuntimeValue;
+impl BinExpSub for RuntimeValueType {
+    type Output = RuntimeValueType;
 
     fn sub(self, rhs: Self, trace: Span) -> Self::Output {
         match (self, rhs) {
-            (RuntimeValue::Number(x), RuntimeValue::Number(y)) => RuntimeValue::Number(x - y),
+            (RuntimeValueType::Number(x), RuntimeValueType::Number(y)) => RuntimeValueType::Number(x - y),
             (f, s) => {
                 Log::err(
                     format!("Operation '-' is not implemented for {:?} and {:?}.", f, s),
@@ -144,12 +157,12 @@ impl BinExpSub for RuntimeValue {
     }
 }
 
-impl BinExpRem for RuntimeValue {
-    type Output = RuntimeValue;
+impl BinExpRem for RuntimeValueType {
+    type Output = RuntimeValueType;
 
     fn rem(self, rhs: Self, trace: Span) -> Self::Output {
         match (self, rhs) {
-            (RuntimeValue::Number(x), RuntimeValue::Number(y)) => RuntimeValue::Number(x % y),
+            (RuntimeValueType::Number(x), RuntimeValueType::Number(y)) => RuntimeValueType::Number(x % y),
             (f, s) => {
                 Log::err(
                     format!("Operation '%' is not implemented for {:?} and {:?}.", f, s),
@@ -162,12 +175,12 @@ impl BinExpRem for RuntimeValue {
     }
 }
 
-impl BinExpRelations for RuntimeValue {
-    type Output = RuntimeValue;
+impl BinExpRelations for RuntimeValueType {
+    type Output = RuntimeValueType;
 
     fn big(self, rhs: Self, trace: Span) -> Self::Output {
         match (self, rhs) {
-            (RuntimeValue::Number(x), RuntimeValue::Number(y)) => RuntimeValue::Boolean(x > y),
+            (RuntimeValueType::Number(x), RuntimeValueType::Number(y)) => RuntimeValueType::Boolean(x > y),
             (f, s) => {
                 Log::err(
                     format!("Operation '>' is not implemented for {:?} and {:?}.", f, s),
@@ -181,7 +194,7 @@ impl BinExpRelations for RuntimeValue {
 
     fn sml(self, rhs: Self, trace: Span) -> Self::Output {
         match (self, rhs) {
-            (RuntimeValue::Number(x), RuntimeValue::Number(y)) => RuntimeValue::Boolean(x < y),
+            (RuntimeValueType::Number(x), RuntimeValueType::Number(y)) => RuntimeValueType::Boolean(x < y),
             (f, s) => {
                 Log::err(
                     format!("Operation '<' is not implemented for {:?} and {:?}.", f, s),
@@ -195,7 +208,7 @@ impl BinExpRelations for RuntimeValue {
 
     fn beq(self, rhs: Self, trace: Span) -> Self::Output {
         match (self, rhs) {
-            (RuntimeValue::Number(x), RuntimeValue::Number(y)) => RuntimeValue::Boolean(x >= y),
+            (RuntimeValueType::Number(x), RuntimeValueType::Number(y)) => RuntimeValueType::Boolean(x >= y),
             (f, s) => {
                 Log::err(
                     format!("Operation '>=' is not implemented for {:?} and {:?}.", f, s),
@@ -209,7 +222,7 @@ impl BinExpRelations for RuntimeValue {
 
     fn seq(self, rhs: Self, trace: Span) -> Self::Output {
         match (self, rhs) {
-            (RuntimeValue::Number(x), RuntimeValue::Number(y)) => RuntimeValue::Boolean(x <= y),
+            (RuntimeValueType::Number(x), RuntimeValueType::Number(y)) => RuntimeValueType::Boolean(x <= y),
             (f, s) => {
                 Log::err(
                     format!("Operation '<=' is not implemented for {:?} and {:?}.", f, s),
@@ -223,9 +236,9 @@ impl BinExpRelations for RuntimeValue {
 
     fn eq(self, rhs: Self, trace: Span) -> Self::Output {
         match (self, rhs) {
-            (RuntimeValue::Number(x), RuntimeValue::Number(y)) => RuntimeValue::Boolean(x == y),
-            (RuntimeValue::String(x), RuntimeValue::String(y)) => RuntimeValue::Boolean(x == y),
-            (RuntimeValue::Boolean(x), RuntimeValue::Boolean(y)) => RuntimeValue::Boolean(x == y),
+            (RuntimeValueType::Number(x), RuntimeValueType::Number(y)) => RuntimeValueType::Boolean(x == y),
+            (RuntimeValueType::String(x), RuntimeValueType::String(y)) => RuntimeValueType::Boolean(x == y),
+            (RuntimeValueType::Boolean(x), RuntimeValueType::Boolean(y)) => RuntimeValueType::Boolean(x == y),
             (f, s) => {
                 Log::err(
                     format!("Operation '==' is not implemented for {:?} and {:?}.", f, s),
@@ -239,9 +252,9 @@ impl BinExpRelations for RuntimeValue {
 
     fn ieq(self, rhs: Self, trace: Span) -> Self::Output {
         match (self, rhs) {
-            (RuntimeValue::Number(x), RuntimeValue::Number(y)) => RuntimeValue::Boolean(x != y),
-            (RuntimeValue::String(x), RuntimeValue::String(y)) => RuntimeValue::Boolean(x != y),
-            (RuntimeValue::Boolean(x), RuntimeValue::Boolean(y)) => RuntimeValue::Boolean(x != y),
+            (RuntimeValueType::Number(x), RuntimeValueType::Number(y)) => RuntimeValueType::Boolean(x != y),
+            (RuntimeValueType::String(x), RuntimeValueType::String(y)) => RuntimeValueType::Boolean(x != y),
+            (RuntimeValueType::Boolean(x), RuntimeValueType::Boolean(y)) => RuntimeValueType::Boolean(x != y),
             (f, s) => {
                 Log::err(
                     format!("Operation '!=' is not implemented for {:?} and {:?}.", f, s),
@@ -254,12 +267,12 @@ impl BinExpRelations for RuntimeValue {
     }
 }
 
-impl BinExpLogicals for RuntimeValue {
-    type Output = RuntimeValue;
+impl BinExpLogicals for RuntimeValueType {
+    type Output = RuntimeValueType;
 
     fn l_and(self, rhs: Self, trace: Span) -> Self::Output {
         match (self, rhs) {
-            (RuntimeValue::Boolean(x), RuntimeValue::Boolean(y)) => RuntimeValue::Boolean(x && y),
+            (RuntimeValueType::Boolean(x), RuntimeValueType::Boolean(y)) => RuntimeValueType::Boolean(x && y),
             (f, s) => {
                 Log::err(
                     format!("Operation '&&' is not implemented for {:?} and {:?}.", f, s),
@@ -273,7 +286,7 @@ impl BinExpLogicals for RuntimeValue {
 
     fn l_or(self, rhs: Self, trace: Span) -> Self::Output {
         match (self, rhs) {
-            (RuntimeValue::Boolean(x), RuntimeValue::Boolean(y)) => RuntimeValue::Boolean(x || y),
+            (RuntimeValueType::Boolean(x), RuntimeValueType::Boolean(y)) => RuntimeValueType::Boolean(x || y),
             (f, s) => {
                 Log::err(
                     format!("Operation '||' is not implemented for {:?} and {:?}.", f, s),
@@ -286,10 +299,10 @@ impl BinExpLogicals for RuntimeValue {
     }
 }
 
-impl RuntimeValue {
+impl RuntimeValueType {
     pub fn index(self, rhs: Self, trace: Span) -> RuntimeValue {
         match (self, rhs) {
-            (RuntimeValue::Array(ad), RuntimeValue::Number(v)) => {
+            (RuntimeValueType::Array(ad), RuntimeValueType::Number(v)) => {
                 ad.values[v.floor() as usize].clone()
             }
             (f, s) => {
@@ -312,7 +325,7 @@ pub struct Variable {
     pub(crate) name: Atom,
     pub(crate) value: Rw<RuntimeValue>,
     pub(crate) is_immut: bool,
-    pub ty: FinalizedDataType,
+    pub ty: BuiltType,
 }
 
 pub enum AssignmentProperty {
@@ -322,14 +335,14 @@ pub enum AssignmentProperty {
 #[derive(Clone, Debug)]
 pub struct FunctionData {
     pub arg_names: Vec<Atom>,
-    pub arg_types: Vec<FinalizedDataType>,
-    pub ret_type: FinalizedDataType,
+    pub arg_types: Vec<BuiltType>,
+    pub ret_type: BuiltType,
     pub function_body: Box<ASTNode>,
     pub scope: Arw<RuntimeScope>,
 }
 
 impl FunctionData {
-    pub fn matches_generics(&self, generics: &Vec<FinalizedDataType>) -> bool {
+    pub fn matches_generics(&self, generics: &Vec<BuiltType>) -> bool {
         if generics.len() != self.arg_types.len() + 1 {
             return false;
         }
@@ -356,7 +369,7 @@ pub enum TypeData {
 #[derive(Clone, Debug)]
 pub struct StructData {
     pub prop_names: Vec<Atom>,
-    pub prop_types: Vec<FinalizedDataType>,
+    pub prop_types: Vec<BuiltType>,
     pub uuid: Uuid,
 }
 
@@ -369,12 +382,12 @@ pub enum ComplexData {
 pub struct ComplexStruct {
     pub name: Atom,
     pub prop_names: Vec<Atom>,
-    pub prop_types: Vec<FinalizedDataType>,
+    pub prop_types: Vec<BuiltType>,
     pub data: HashMap<Atom, RuntimeValue>,
 }
 
 #[derive(Clone, Debug)]
 pub struct ArrayData {
-    pub ty: FinalizedDataType,
+    pub ty: BuiltType,
     pub values: Vec<RuntimeValue>,
 }

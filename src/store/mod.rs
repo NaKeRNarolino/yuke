@@ -55,8 +55,8 @@ impl AtomStorage {
         }
     }
 
-    pub fn atom(string: String) -> Atom {
-        ATOM_TABLE.write().unwrap().get_atom(string)
+    pub fn atom(string: impl Into<String>) -> Atom {
+        ATOM_TABLE.write().unwrap().get_atom(string.into())
     }
 
     pub fn string(atom: Atom) -> Result<&'static String, AtomStorageError> {
